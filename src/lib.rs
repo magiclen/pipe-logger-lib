@@ -474,6 +474,7 @@ impl PipeLogger {
                                                     match file_r.read(&mut buffer) {
                                                         Ok(c) => {
                                                             if c == 0 {
+                                                                drop(file_r);
                                                                 if let Err(_) = fs::remove_file(&rotated_log_file) {}
                                                                 break;
                                                             }
@@ -489,6 +490,11 @@ impl PipeLogger {
                                                                     break;
                                                                 }
                                                             }
+                                                        }
+                                                        Err(ref err) if err.kind() == io::ErrorKind::NotFound => { // The rotated log file is deleted because of the count limit
+                                                            drop(compressor);
+                                                            if let Err(_) = fs::remove_file(&rotated_log_file_compressed) {}
+                                                            break;
                                                         }
                                                         Err(err) => {
                                                             print_err(err.to_string());

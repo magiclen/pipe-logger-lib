@@ -289,9 +289,8 @@ fn test_write_rotate_with_compress() {
 
     if test_folder.read_dir().unwrap().count() != 7 {
         thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
+        assert_eq!(7, test_folder.read_dir().unwrap().count());
     }
-
-    assert_eq!(7, test_folder.read_dir().unwrap().count());
 
     for new_file in new_files {
         assert!(new_file.exists());
@@ -344,9 +343,8 @@ fn test_write_rotate_with_count_compress() {
 
     if test_folder.read_dir().unwrap().count() != 5 {
         thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
+        assert_eq!(5, test_folder.read_dir().unwrap().count());
     }
-
-    assert_eq!(5, test_folder.read_dir().unwrap().count());
 
     for new_file in new_files.iter().skip(2) {
         assert!(new_file.exists());
