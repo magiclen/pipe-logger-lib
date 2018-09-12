@@ -106,8 +106,8 @@ pub enum PipeLoggerBuilderError {
     CountTooSmall,
     /// std::io::Error.
     IOError(io::Error),
-    /// A log file cannot be a directory.
-    FileIsDirectory,
+    /// A log file cannot be a directory. Wrap the absolutized log file.
+    FileIsDirectory(PathBuf),
 }
 
 #[derive(Debug, Clone)]
@@ -207,7 +207,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
         let folder_path = if file_path.exists() {
             if file_path.is_dir() {
-                return Err(PipeLoggerBuilderError::FileIsDirectory);
+                return Err(PipeLoggerBuilderError::FileIsDirectory(file_path));
             }
             match fs::metadata(&file_path) {
                 Ok(m) => {
