@@ -279,7 +279,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
         let rotated_log_file_names = {
             let mut rotated_log_file_names = Vec::new();
 
-            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{3}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.3f
+            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{6}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.6f
 
             let file_name_without_extension = &file_name[..file_name_point_index];
 
@@ -305,13 +305,13 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     }
                 };
 
-                if rotated_log_file_name_point_index < file_name_point_index + 24 { // -%Y-%m-%d-%H-%M-%S + $.3f
+                if rotated_log_file_name_point_index < file_name_point_index + 27 { // -%Y-%m-%d-%H-%M-%S + $.6f
                     continue;
                 }
 
                 let file_name_without_extension_len = file_name_without_extension.len();
 
-                if !re.is_match(&rotated_log_file_name[file_name_without_extension_len..file_name_without_extension_len + 24]) {  // -%Y-%m-%d-%H-%M-%S + $.3f
+                if !re.is_match(&rotated_log_file_name[file_name_without_extension_len..file_name_without_extension_len + 27]) {  // -%Y-%m-%d-%H-%M-%S + $.6f
                     continue;
                 }
 
@@ -424,15 +424,7 @@ impl PipeLogger {
                     if self.file_size >= *size {
                         let utc: DateTime<Utc> = Utc::now();
                         let timestamp = utc.format("%Y-%m-%d-%H-%M-%S").to_string();
-                        let millisecond = {
-                            let mut s = utc.format("%.3f").to_string();
-
-                            while s.len() < 4 {
-                                s.push('0');
-                            }
-
-                            s
-                        };
+                        let millisecond = utc.format("%.6f").to_string();
 
                         file.flush()?;
 
