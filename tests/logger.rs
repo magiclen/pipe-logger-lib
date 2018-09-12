@@ -12,7 +12,7 @@ use pipe_logger_lib::*;
 use chrono::prelude::*;
 
 const LOG_FILE_NAME: &str = "logfile.log";
-const WAIT_DURATION_MILLISECOND: u64 = 10000;
+const WAIT_DURATION_MILLISECOND: u64 = 5000;
 
 fn read_to_string(mut file: File) -> String {
     let mut string = String::new();

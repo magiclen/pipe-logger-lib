@@ -424,7 +424,15 @@ impl PipeLogger {
                     if self.file_size >= *size {
                         let utc: DateTime<Utc> = Utc::now();
                         let timestamp = utc.format("%Y-%m-%d-%H-%M-%S").to_string();
-                        let millisecond = utc.format("%.3f").to_string();
+                        let millisecond = {
+                            let mut s = utc.format("%.3f").to_string();
+
+                            while s.len() < 4 {
+                                s.push('0');
+                            }
+
+                            s
+                        };
 
                         file.flush()?;
 
