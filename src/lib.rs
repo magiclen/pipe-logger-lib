@@ -503,6 +503,10 @@ impl PipeLogger {
                                                     }
                                                 }
                                             }
+                                            Err(ref err) if err.kind() == io::ErrorKind::NotFound => { // The rotated log file is deleted because of the count limit
+                                                drop(file_w);
+                                                if let Err(_) = fs::remove_file(&rotated_log_file_compressed) {}
+                                            }
                                             Err(err) => {
                                                 print_err(err.to_string());
                                             }

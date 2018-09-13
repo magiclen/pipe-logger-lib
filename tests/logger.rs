@@ -12,7 +12,7 @@ use pipe_logger_lib::*;
 use chrono::prelude::*;
 
 const LOG_FILE_NAME: &str = "logfile.log";
-const WAIT_DURATION_MILLISECOND: u64 = 5000;
+const WAIT_DURATION_MILLISECOND: u64 = 1000;
 
 fn read_to_string(mut file: File) -> String {
     let mut string = String::new();
@@ -289,7 +289,10 @@ fn test_write_rotate_with_compress() {
 
     if test_folder.read_dir().unwrap().count() != 7 {
         thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
-        assert_eq!(7, test_folder.read_dir().unwrap().count());
+        if test_folder.read_dir().unwrap().count() != 7 {
+            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 3));
+            assert_eq!(7, test_folder.read_dir().unwrap().count());
+        }
     }
 
     for new_file in new_files {
@@ -343,7 +346,10 @@ fn test_write_rotate_with_count_compress() {
 
     if test_folder.read_dir().unwrap().count() != 5 {
         thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
-        assert_eq!(5, test_folder.read_dir().unwrap().count());
+        if test_folder.read_dir().unwrap().count() != 5 {
+            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 3));
+            assert_eq!(5, test_folder.read_dir().unwrap().count());
+        }
     }
 
     for new_file in new_files.iter().skip(2) {
