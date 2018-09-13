@@ -13,4 +13,4 @@ addons:
     - lzma-dev
 env: LZMA_API_STATIC=1
 script:
-  - cargo test --verbose -- --test-threads=1
+  - cargo test --verbose

@@ -1,18 +1,18 @@
 extern crate pipe_logger_lib;
-extern crate chrono;
 
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::Read;
 use std::thread;
 use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pipe_logger_lib::*;
 
-use chrono::prelude::*;
-
 const LOG_FILE_NAME: &str = "logfile.log";
-const WAIT_DURATION_MILLISECOND: u64 = 1000;
+const WAIT_DURATION_MILLI_SECONDS: u64 = 1000;
+
+static mut LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
 
 fn read_to_string(mut file: File) -> String {
     let mut string = String::new();
@@ -24,8 +24,9 @@ fn read_to_string(mut file: File) -> String {
 
 fn create_test_folder() -> PathBuf {
     let test_folder_name = {
-        let utc: DateTime<Utc> = Utc::now();
-        utc.timestamp_nanos().to_string()
+        unsafe {
+            LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst)
+        }.to_string()
     };
 
     let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), Path::new(&test_folder_name));
@@ -285,12 +286,12 @@ fn test_write_rotate_with_compress() {
         logger.write_line("New file!!!!").unwrap();
     };
 
-    thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND));
+    thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS));
 
     if test_folder.read_dir().unwrap().count() != 7 {
-        thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
+        thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS * 2));
         if test_folder.read_dir().unwrap().count() != 7 {
-            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 3));
+            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS * 3));
             assert_eq!(7, test_folder.read_dir().unwrap().count());
         }
     }
@@ -342,12 +343,12 @@ fn test_write_rotate_with_count_compress() {
         logger.write_line("New file!!!!").unwrap();
     };
 
-    thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND));
+    thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS));
 
     if test_folder.read_dir().unwrap().count() != 5 {
-        thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 2));
+        thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS * 2));
         if test_folder.read_dir().unwrap().count() != 5 {
-            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLISECOND * 3));
+            thread::sleep(Duration::from_millis(WAIT_DURATION_MILLI_SECONDS * 3));
             assert_eq!(5, test_folder.read_dir().unwrap().count());
         }
     }

@@ -79,6 +79,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::fs::{self, File, OpenOptions};
 use std::thread;
+use std::time::Duration;
 
 use path_absolutize::*;
 use chrono::prelude::*;
@@ -88,6 +89,7 @@ use regex::Regex;
 use xz2::write::XzEncoder;
 
 const BUFFER_SIZE: usize = 4096 * 4;
+const FILE_WAIT_MILLI_SECONDS: u64 = 30;
 
 #[derive(Debug)]
 /// The way to rotate log files.
@@ -279,7 +281,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
         let rotated_log_file_names = {
             let mut rotated_log_file_names = Vec::new();
 
-            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{6}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.6f
+            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{6}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.3f
 
             let file_name_without_extension = &file_name[..file_name_point_index];
 
@@ -305,13 +307,13 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     }
                 };
 
-                if rotated_log_file_name_point_index < file_name_point_index + 27 { // -%Y-%m-%d-%H-%M-%S + $.6f
+                if rotated_log_file_name_point_index < file_name_point_index + 24 { // -%Y-%m-%d-%H-%M-%S + $.3f
                     continue;
                 }
 
                 let file_name_without_extension_len = file_name_without_extension.len();
 
-                if !re.is_match(&rotated_log_file_name[file_name_without_extension_len..file_name_without_extension_len + 27]) {  // -%Y-%m-%d-%H-%M-%S + $.6f
+                if !re.is_match(&rotated_log_file_name[file_name_without_extension_len..file_name_without_extension_len + 24]) {  // -%Y-%m-%d-%H-%M-%S + $.3f
                     continue;
                 }
 
@@ -347,6 +349,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             rotated_log_file_names,
             compress: self.compress,
             tee: self.tee,
+            last_rotated_time: 0,
         })
     }
 }
@@ -368,6 +371,7 @@ pub struct PipeLogger {
     rotated_log_file_names: Vec<String>,
     compress: bool,
     tee: Option<Tee>,
+    last_rotated_time: i64,
 }
 
 impl Write for PipeLogger {
@@ -422,9 +426,21 @@ impl PipeLogger {
             match rotate {
                 RotateMethod::FileSize(size) => {
                     if self.file_size >= *size {
-                        let utc: DateTime<Utc> = Utc::now();
+                        let utc: DateTime<Utc> = {
+                            let mut utc: DateTime<Utc> = Utc::now();
+                            let mut millisecond = utc.timestamp_millis();
+                            while self.last_rotated_time == millisecond {
+                                // Especially for Windows, because its time precision is about 15ms.
+                                thread::sleep(Duration::from_millis(FILE_WAIT_MILLI_SECONDS));
+                                utc = Utc::now();
+                                millisecond = utc.timestamp_millis();
+                            }
+                            self.last_rotated_time = millisecond;
+                            utc
+                        };
+
                         let timestamp = utc.format("%Y-%m-%d-%H-%M-%S").to_string();
-                        let millisecond = utc.format("%.6f").to_string();
+                        let millisecond = utc.format("%.3f").to_string();
 
                         file.flush()?;
 
