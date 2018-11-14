@@ -1,79 +1,85 @@
-//! # Pipe Logger Lib
-//! Stores, rotates, compresses process logs.
-//!
-//! ## Example
-//!
-//! ```
-//! extern crate pipe_logger_lib;
-//!
-//! use pipe_logger_lib::*;
-//!
-//! use std::fs;
-//! use std::path::Path;
-//!
-//! let test_folder = {
-//!   let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), "log-example");
-//!
-//!   fs::remove_dir_all(&folder);
-//!
-//!   fs::create_dir_all(&folder).unwrap();
-//!
-//!   folder
-//! };
-//!
-//! let test_log_file = Path::join(&test_folder, Path::new("mylog.txt"));
-//!
-//! let mut builder = PipeLoggerBuilder::new(&test_log_file);
-//!
-//! builder
-//!     .set_tee(Some(Tee::Stdout))
-//!     .set_rotate(Some(RotateMethod::FileSize(30))) // bytes
-//!     .set_count(Some(10))
-//!     .set_compress(false);
-//!
-//! {
-//!     let mut logger = builder.build().unwrap();
-//!
-//!     logger.write_line("Hello world!").unwrap();
-//!
-//!     let rotated_log_file_1 = logger.write_line("This is a convenient logger.").unwrap().unwrap();
-//!
-//!     logger.write_line("Other logs...").unwrap();
-//!     logger.write_line("Other logs...").unwrap();
-//!
-//!     let rotated_log_file_2 = logger.write_line("Rotate again!").unwrap().unwrap();
-//!
-//!     logger.write_line("Ops!").unwrap();
-//! }
-//!
-//! fs::remove_dir_all(test_folder).unwrap();
-//! ```
-//!
-//! Now, the contents of `test_log_file` are,
-//!
-//! ```text
-//! Ops!
-//! ```
-//!
-//! The contents of `rotated_log_file_1` are,
-//!
-//! ```text
-//! Hello world!
-//! This is a convenient logger.
-//! ```
-//!
-//! The contents of `rotated_log_file_2` are,
-//!
-//! ```text
-//! Other logs...
-//! Other logs...
-//! Rotate again!
-//! ```
+/*!
+# Pipe Logger Lib
+Stores, rotates, compresses process logs.
+
+## Example
+
+```rust
+extern crate pipe_logger_lib;
+
+use pipe_logger_lib::*;
+
+use std::fs;
+use std::path::Path;
+
+let test_folder = {
+  let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), "log-example");
+
+  fs::remove_dir_all(&folder);
+
+  fs::create_dir_all(&folder).unwrap();
+
+  folder
+};
+
+let test_log_file = Path::join(&test_folder, Path::new("mylog.txt"));
+
+let mut builder = PipeLoggerBuilder::new(&test_log_file);
+
+builder
+    .set_tee(Some(Tee::Stdout))
+    .set_rotate(Some(RotateMethod::FileSize(30))) // bytes
+    .set_count(Some(10))
+    .set_compress(false);
+
+{
+    let mut logger = builder.build().unwrap();
+
+    logger.write_line("Hello world!").unwrap();
+
+    let rotated_log_file_1 = logger.write_line("This is a convenient logger.").unwrap().unwrap();
+
+    logger.write_line("Other logs...").unwrap();
+    logger.write_line("Other logs...").unwrap();
+
+    let rotated_log_file_2 = logger.write_line("Rotate again!").unwrap().unwrap();
+
+    logger.write_line("Ops!").unwrap();
+}
+
+fs::remove_dir_all(test_folder).unwrap();
+```
+
+Now, the contents of `test_log_file` are,
+
+```text
+Ops!
+```
+
+The contents of `rotated_log_file_1` are,
+
+```text
+Hello world!
+This is a convenient logger.
+```
+
+The contents of `rotated_log_file_2` are,
+
+```text
+Other logs...
+Other logs...
+Rotate again!
+```
+*/
 
 extern crate chrono;
 extern crate regex;
 extern crate xz2;
 extern crate path_absolutize;
+
+mod rotate_method;
+
+pub use rotate_method::RotateMethod;
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -90,13 +96,6 @@ use xz2::write::XzEncoder;
 
 const BUFFER_SIZE: usize = 4096 * 4;
 const FILE_WAIT_MILLI_SECONDS: u64 = 30;
-
-#[derive(Debug)]
-/// The way to rotate log files.
-pub enum RotateMethod {
-    /// Rotate log files by a file size threshold in bytes.
-    FileSize(u64)
-}
 
 // TODO -----PipeLoggerBuilder START-----
 
@@ -240,9 +239,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     }
                     parent
                 }
-                None => {
-                    panic!("impossible");
-                }
+                None => unreachable!()
             }
         } else {
             file_size = 0;
@@ -387,9 +384,7 @@ impl Write for PipeLogger {
             Some(ref mut file) => {
                 file.flush()
             }
-            None => {
-                panic!("impossible")
-            }
+            None => unreachable!()
         }
     }
 }
@@ -596,9 +591,7 @@ impl PipeLogger {
 
                     self.file_size += 1u64;
                 }
-                None => {
-                    panic!("impossible");
-                }
+                None => unreachable!()
             }
             self.print("\n");
         }

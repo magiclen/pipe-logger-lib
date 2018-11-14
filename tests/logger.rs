@@ -1,8 +1,7 @@
 extern crate pipe_logger_lib;
 
 use std::path::{Path, PathBuf};
-use std::fs::{self, File};
-use std::io::Read;
+use std::fs;
 use std::thread;
 use std::time::Duration;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,14 +12,6 @@ const LOG_FILE_NAME: &str = "logfile.log";
 const WAIT_DURATION_MILLI_SECONDS: u64 = 1000;
 
 static mut LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
-
-fn read_to_string(mut file: File) -> String {
-    let mut string = String::new();
-
-    file.read_to_string(&mut string).unwrap();
-
-    string
-}
 
 fn create_test_folder() -> PathBuf {
     let test_folder_name = {
@@ -37,7 +28,7 @@ fn create_test_folder() -> PathBuf {
 }
 
 #[test]
-fn test_build() {
+fn build() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -56,7 +47,7 @@ fn test_build() {
 }
 
 #[test]
-fn test_write() {
+fn write() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -69,7 +60,7 @@ fn test_write() {
         logger.write("This is a log.").unwrap();
     }
 
-    let string = read_to_string(File::open(test_log_path).unwrap());
+    let string = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("This is a log.", string);
 
@@ -77,7 +68,7 @@ fn test_write() {
 }
 
 #[test]
-fn test_write_line() {
+fn write_line() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -90,7 +81,7 @@ fn test_write_line() {
         logger.write_line("This is a log.").unwrap();
     }
 
-    let string = read_to_string(File::open(test_log_path).unwrap());
+    let string = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("This is a log.\n", string);
 
@@ -98,7 +89,7 @@ fn test_write_line() {
 }
 
 #[test]
-fn test_write_twice() {
+fn write_twice() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -112,7 +103,7 @@ fn test_write_twice() {
         logger.write("Isn't it?").unwrap();
     }
 
-    let string = read_to_string(File::open(test_log_path).unwrap());
+    let string = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("This is a log.\nIsn't it?", string);
 
@@ -120,7 +111,7 @@ fn test_write_twice() {
 }
 
 #[test]
-fn test_write_tee_out() {
+fn write_tee_out() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -136,7 +127,7 @@ fn test_write_tee_out() {
         logger.write_line("Isn't it?").unwrap();
     }
 
-    let string = read_to_string(File::open(test_log_path).unwrap());
+    let string = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("This is a log.\nIsn't it?\n", string);
 
@@ -144,7 +135,7 @@ fn test_write_tee_out() {
 }
 
 #[test]
-fn test_write_tee_err() {
+fn write_tee_err() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -160,7 +151,7 @@ fn test_write_tee_err() {
         logger.write_line("Isn't it?").unwrap();
     }
 
-    let string = read_to_string(File::open(test_log_path).unwrap());
+    let string = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("This is a log.\nIsn't it?\n", string);
 
@@ -168,7 +159,7 @@ fn test_write_tee_err() {
 }
 
 #[test]
-fn test_write_rotate() {
+fn write_rotate() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -188,11 +179,11 @@ fn test_write_rotate() {
         new_file
     };
 
-    let string_1 = read_to_string(File::open(test_log_path).unwrap());
+    let string_1 = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("New file!!!!\n", string_1);
 
-    let string_2 = read_to_string(File::open(new_file).unwrap());
+    let string_2 = fs::read_to_string(new_file).unwrap();
 
     assert_eq!("This is a log.\nIsn't it?", string_2);
 
@@ -200,7 +191,7 @@ fn test_write_rotate() {
 }
 
 #[test]
-fn test_write_rotate_with_count() {
+fn write_rotate_with_count() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -238,11 +229,11 @@ fn test_write_rotate_with_count() {
 
     assert_eq!(5, test_folder.read_dir().unwrap().count());
 
-    let string_1 = read_to_string(File::open(test_log_path).unwrap());
+    let string_1 = fs::read_to_string(test_log_path).unwrap();
 
     assert_eq!("New file!!!!\n", string_1);
 
-    let string_2 = read_to_string(File::open(new_file).unwrap());
+    let string_2 = fs::read_to_string(new_file).unwrap();
 
     assert_eq!("This is a log.\nIsn't it?", string_2);
 
@@ -250,7 +241,7 @@ fn test_write_rotate_with_count() {
 }
 
 #[test]
-fn test_write_rotate_with_compress() {
+fn write_rotate_with_compress() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
@@ -306,7 +297,7 @@ fn test_write_rotate_with_compress() {
 }
 
 #[test]
-fn test_write_rotate_with_count_compress() {
+fn write_rotate_with_count_compress() {
     let test_folder = create_test_folder();
 
     let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
