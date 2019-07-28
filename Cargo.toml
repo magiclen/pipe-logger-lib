@@ -1,6 +1,6 @@
 [package]
 name = "pipe-logger-lib"
-version = "1.1.5"
+version = "1.1.6"
 authors = ["Magic Len <len@magiclen.org>"]
 repository = "https://github.com/magiclen/pipe-logger-lib"
 homepage = "https://magiclen.org/pipe-logger-lib"
@@ -10,9 +10,9 @@ description= "Stores, rotates, compresses process logs."
 readme = "README.md"
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "magiclen/pipe-logger-lib", branch = "master" }
-appveyor = { repository = "magiclen/pipe-logger-lib", branch = "master", service = "github" }
+[badges.travis-ci]
+repository = "magiclen/pipe-logger-lib"
+branch = "master"
 
 [dependencies]
 chrono = "0.4.4"
