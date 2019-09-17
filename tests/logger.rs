@@ -1,10 +1,10 @@
 extern crate pipe_logger_lib;
 
-use std::path::{Path, PathBuf};
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pipe_logger_lib::*;
 
@@ -14,13 +14,11 @@ const WAIT_DURATION_MILLI_SECONDS: u64 = 1000;
 static mut LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
 
 fn create_test_folder() -> PathBuf {
-    let test_folder_name = {
-        unsafe {
-            LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst)
-        }.to_string()
-    };
+    let test_folder_name =
+        { unsafe { LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst) }.to_string() };
 
-    let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), Path::new(&test_folder_name));
+    let folder =
+        Path::join(&Path::join(Path::new("tests"), Path::new("out")), Path::new(&test_folder_name));
 
     fs::create_dir_all(&folder).unwrap();
 

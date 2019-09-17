@@ -73,22 +73,22 @@ Rotate again!
 */
 
 extern crate chrono;
+extern crate path_absolutize;
 extern crate regex;
 extern crate xz2;
-extern crate path_absolutize;
 
 mod rotate_method;
 
 pub use rotate_method::RotateMethod;
 
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::fs::{self, File, OpenOptions};
 use std::thread;
 use std::time::Duration;
 
-use path_absolutize::*;
 use chrono::prelude::*;
+use path_absolutize::*;
 
 use regex::Regex;
 
@@ -109,6 +109,20 @@ pub enum PipeLoggerBuilderError {
     IOError(io::Error),
     /// A log file cannot be a directory. Wrap the absolutized log file.
     FileIsDirectory(PathBuf),
+}
+
+impl From<io::Error> for PipeLoggerBuilderError {
+    #[inline]
+    fn from(err: io::Error) -> Self {
+        PipeLoggerBuilderError::IOError(err)
+    }
+}
+
+impl From<PathBuf> for PipeLoggerBuilderError {
+    #[inline]
+    fn from(err: PathBuf) -> Self {
+        PipeLoggerBuilderError::FileIsDirectory(err)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +216,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             }
         }
 
-        let file_path = self.log_path.as_ref().absolutize().map_err(|err| PipeLoggerBuilderError::IOError(err))?;
+        let file_path = self.log_path.as_ref().absolutize()?;
 
         let file_size;
 
@@ -214,7 +228,10 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                 Ok(m) => {
                     let p = m.permissions();
                     if p.readonly() {
-                        return Err(PipeLoggerBuilderError::IOError(io::Error::new(io::ErrorKind::PermissionDenied, format!("`{}` is readonly.", file_path.to_str().unwrap()))));
+                        return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("`{}` is readonly.", file_path.to_str().unwrap()),
+                        )));
                     }
                     file_size = m.len();
                 }
@@ -229,7 +246,10 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                             Ok(m) => {
                                 let p = m.permissions();
                                 if p.readonly() {
-                                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(io::ErrorKind::PermissionDenied, format!("`{}` is readonly.", parent.to_str().unwrap()))));
+                                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                                        io::ErrorKind::PermissionDenied,
+                                        format!("`{}` is readonly.", parent.to_str().unwrap()),
+                                    )));
                                 }
                             }
                             Err(err) => {
@@ -239,7 +259,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     }
                     parent
                 }
-                None => unreachable!()
+                None => unreachable!(),
             }
         } else {
             file_size = 0;
@@ -249,7 +269,10 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                         Ok(m) => {
                             let p = m.permissions();
                             if p.readonly() {
-                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(io::ErrorKind::PermissionDenied, format!("`{}` is readonly.", parent.to_str().unwrap()))));
+                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                                    io::ErrorKind::PermissionDenied,
+                                    format!("`{}` is readonly.", parent.to_str().unwrap()),
+                                )));
                             }
                             parent
                         }
@@ -259,20 +282,20 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     }
                 }
                 None => {
-                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(io::ErrorKind::NotFound, format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()))));
+                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()),
+                    )));
                 }
             }
-        }.to_path_buf();
+        }
+        .to_path_buf();
 
         let file_name = Path::new(&file_path).file_name().unwrap().to_str().unwrap().to_string();
 
-        let file_name_point_index = match file_name.rfind(".") {
-            Some(index) => {
-                index
-            }
-            None => {
-                file_name.len()
-            }
+        let file_name_point_index = match file_name.rfind('.') {
+            Some(index) => index,
+            None => file_name.len(),
         };
 
         let rotated_log_file_names = {
@@ -289,28 +312,30 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     continue;
                 }
 
-                let rotated_log_file_name = Path::new(&rotated_log_file_path).file_name().unwrap().to_str().unwrap();
+                let rotated_log_file_name =
+                    Path::new(&rotated_log_file_path).file_name().unwrap().to_str().unwrap();
 
                 if !rotated_log_file_name.starts_with(file_name_without_extension) {
                     continue;
                 }
 
-                let rotated_log_file_name_point_index = match rotated_log_file_name.rfind(".") {
-                    Some(index) => {
-                        index
-                    }
-                    None => {
-                        rotated_log_file_name.len()
-                    }
+                let rotated_log_file_name_point_index = match rotated_log_file_name.rfind('.') {
+                    Some(index) => index,
+                    None => rotated_log_file_name.len(),
                 };
 
-                if rotated_log_file_name_point_index < file_name_point_index + 24 { // -%Y-%m-%d-%H-%M-%S + $.3f
+                if rotated_log_file_name_point_index < file_name_point_index + 24 {
+                    // -%Y-%m-%d-%H-%M-%S + $.3f
                     continue;
                 }
 
                 let file_name_without_extension_len = file_name_without_extension.len();
 
-                if !re.is_match(&rotated_log_file_name[file_name_without_extension_len..file_name_without_extension_len + 24]) {  // -%Y-%m-%d-%H-%M-%S + $.3f
+                if !re.is_match(
+                    &rotated_log_file_name
+                        [file_name_without_extension_len..file_name_without_extension_len + 24],
+                ) {
+                    // -%Y-%m-%d-%H-%M-%S + $.3f
                     continue;
                 }
 
@@ -318,8 +343,13 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
                 if ext.eq(&file_name[file_name_point_index..]) {
                     rotated_log_file_names.push(rotated_log_file_name.to_string());
-                } else if ext.eq(".xz") && rotated_log_file_name[..rotated_log_file_name_point_index].ends_with(&file_name[file_name_point_index..]) {
-                    rotated_log_file_names.push(rotated_log_file_name[..rotated_log_file_name_point_index].to_string());
+                } else if ext.eq(".xz")
+                    && rotated_log_file_name[..rotated_log_file_name_point_index]
+                        .ends_with(&file_name[file_name_point_index..])
+                {
+                    rotated_log_file_names.push(
+                        rotated_log_file_name[..rotated_log_file_name_point_index].to_string(),
+                    );
                 }
             }
 
@@ -328,11 +358,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             rotated_log_file_names
         };
 
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(true)
-            .open(&file_path).map_err(|err| PipeLoggerBuilderError::IOError(err))?;
+        let file = OpenOptions::new().create(true).write(true).append(true).open(&file_path)?;
 
         Ok(PipeLogger {
             rotate: self.rotate,
@@ -381,10 +407,8 @@ impl Write for PipeLogger {
 
     fn flush(&mut self) -> io::Result<()> {
         match self.file {
-            Some(ref mut file) => {
-                file.flush()
-            }
-            None => unreachable!()
+            Some(ref mut file) => file.flush(),
+            None => unreachable!(),
         }
     }
 }
@@ -443,15 +467,26 @@ impl PipeLogger {
 
                         drop(file);
 
-                        let rotated_log_file_name = format!("{}-{}-{}{}", &self.file_name[..self.file_name_point_index], timestamp, &millisecond[1..], &self.file_name[self.file_name_point_index..]);
+                        let rotated_log_file_name = format!(
+                            "{}-{}-{}{}",
+                            &self.file_name[..self.file_name_point_index],
+                            timestamp,
+                            &millisecond[1..],
+                            &self.file_name[self.file_name_point_index..]
+                        );
 
-                        let rotated_log_file = Path::join(&self.folder_path, Path::new(&rotated_log_file_name));
+                        let rotated_log_file =
+                            Path::join(&self.folder_path, Path::new(&rotated_log_file_name));
 
                         fs::copy(&self.file_path, &rotated_log_file)?;
 
                         if self.compress {
-                            let rotated_log_file_name_compressed = format!("{}.xz", rotated_log_file_name);
-                            let rotated_log_file_compressed = Path::join(&self.folder_path, Path::new(&rotated_log_file_name_compressed));
+                            let rotated_log_file_name_compressed =
+                                format!("{}.xz", rotated_log_file_name);
+                            let rotated_log_file_compressed = Path::join(
+                                &self.folder_path,
+                                Path::new(&rotated_log_file_name_compressed),
+                            );
                             let rotated_log_file = rotated_log_file.clone();
 
                             let tee = self.tee.clone();
@@ -486,7 +521,12 @@ impl PipeLogger {
                                                         Ok(c) => {
                                                             if c == 0 {
                                                                 drop(file_r);
-                                                                if let Err(_) = fs::remove_file(&rotated_log_file) {}
+                                                                if fs::remove_file(
+                                                                    &rotated_log_file,
+                                                                )
+                                                                .is_err()
+                                                                {
+                                                                }
                                                                 break;
                                                             }
                                                             match compressor.write(&buffer[..c]) {
@@ -502,9 +542,18 @@ impl PipeLogger {
                                                                 }
                                                             }
                                                         }
-                                                        Err(ref err) if err.kind() == io::ErrorKind::NotFound => { // The rotated log file is deleted because of the count limit
+                                                        Err(ref err)
+                                                            if err.kind()
+                                                                == io::ErrorKind::NotFound =>
+                                                        {
+                                                            // The rotated log file is deleted because of the count limit
                                                             drop(compressor);
-                                                            if let Err(_) = fs::remove_file(&rotated_log_file_compressed) {}
+                                                            if fs::remove_file(
+                                                                &rotated_log_file_compressed,
+                                                            )
+                                                            .is_err()
+                                                            {
+                                                            }
                                                             break;
                                                         }
                                                         Err(err) => {
@@ -514,9 +563,15 @@ impl PipeLogger {
                                                     }
                                                 }
                                             }
-                                            Err(ref err) if err.kind() == io::ErrorKind::NotFound => { // The rotated log file is deleted because of the count limit
+                                            Err(ref err)
+                                                if err.kind() == io::ErrorKind::NotFound =>
+                                            {
+                                                // The rotated log file is deleted because of the count limit
                                                 drop(file_w);
-                                                if let Err(_) = fs::remove_file(&rotated_log_file_compressed) {}
+                                                if fs::remove_file(&rotated_log_file_compressed)
+                                                    .is_err()
+                                                {
+                                                }
                                             }
                                             Err(err) => {
                                                 print_err(err.to_string());
@@ -534,8 +589,14 @@ impl PipeLogger {
 
                         if let Some(count) = self.count {
                             while self.rotated_log_file_names.len() >= count {
-                                let mut rotated_log_file_name = self.rotated_log_file_names.remove(0);
-                                if let Err(_) = fs::remove_file(Path::join(&self.folder_path, Path::new(&rotated_log_file_name))) {}
+                                let mut rotated_log_file_name =
+                                    self.rotated_log_file_names.remove(0);
+                                if fs::remove_file(Path::join(
+                                    &self.folder_path,
+                                    Path::new(&rotated_log_file_name),
+                                ))
+                                .is_err()
+                                {}
 
                                 let p_compressed_name = {
                                     rotated_log_file_name.push_str(".xz");
@@ -543,15 +604,14 @@ impl PipeLogger {
                                     rotated_log_file_name
                                 };
 
-                                let p_compressed = Path::join(&self.folder_path, Path::new(&p_compressed_name));
-                                if let Err(_) = fs::remove_file(&p_compressed) {}
+                                let p_compressed =
+                                    Path::join(&self.folder_path, Path::new(&p_compressed_name));
+                                if fs::remove_file(&p_compressed).is_err() {}
                             }
                         }
 
-                        file = OpenOptions::new()
-                            .write(true)
-                            .truncate(true)
-                            .open(&self.file_path)?;
+                        file =
+                            OpenOptions::new().write(true).truncate(true).open(&self.file_path)?;
 
                         self.file_size = 0;
 
@@ -586,12 +646,15 @@ impl PipeLogger {
                     let n = file.write(b"\n")?;
 
                     if n != 1 {
-                        return Err(io::Error::new(io::ErrorKind::BrokenPipe, "The space is not enough."));
+                        return Err(io::Error::new(
+                            io::ErrorKind::BrokenPipe,
+                            "The space is not enough.",
+                        ));
                     }
 
                     self.file_size += 1u64;
                 }
-                None => unreachable!()
+                None => unreachable!(),
             }
             self.print("\n");
         }
@@ -613,7 +676,7 @@ impl PipeLogger {
                     }
                 }
             }
-            None => ()
+            None => (),
         }
     }
 }
