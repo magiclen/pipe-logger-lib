@@ -81,6 +81,8 @@ mod rotate_method;
 
 pub use rotate_method::RotateMethod;
 
+use std::error::Error;
+use std::fmt::{Display, Error as FmtError, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -110,6 +112,29 @@ pub enum PipeLoggerBuilderError {
     /// A log file cannot be a directory. Wrap the absolutized log file.
     FileIsDirectory(PathBuf),
 }
+
+impl Display for PipeLoggerBuilderError {
+    #[inline]
+    fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
+        match self {
+            PipeLoggerBuilderError::RotateFileSizeTooSmall => {
+                f.write_str("A valid rotated file size needs bigger than 1.")
+            }
+            PipeLoggerBuilderError::CountTooSmall => {
+                f.write_str("A valid count of log files needs bigger than 0.")
+            }
+            PipeLoggerBuilderError::IOError(err) => Display::fmt(err, f),
+            PipeLoggerBuilderError::FileIsDirectory(path) => {
+                f.write_fmt(format_args!(
+                    "A log file cannot be a directory. The path of that file is `{}`.",
+                    path.to_string_lossy()
+                ))
+            }
+        }
+    }
+}
+
+impl Error for PipeLoggerBuilderError {}
 
 impl From<io::Error> for PipeLoggerBuilderError {
     #[inline]
