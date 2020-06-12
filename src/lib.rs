@@ -245,28 +245,56 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
         let file_size;
 
-        let folder_path = if file_path.exists() {
-            if file_path.is_dir() {
-                return Err(PipeLoggerBuilderError::FileIsDirectory(file_path));
-            }
-            match fs::metadata(&file_path) {
-                Ok(m) => {
-                    let p = m.permissions();
-                    if p.readonly() {
-                        return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                            io::ErrorKind::PermissionDenied,
-                            format!("`{}` is readonly.", file_path.to_str().unwrap()),
-                        )));
+        let folder_path = match file_path.metadata() {
+            Ok(metadata) => {
+                if metadata.is_dir() {
+                    return Err(PipeLoggerBuilderError::FileIsDirectory(file_path.into_owned()));
+                }
+
+                let p = metadata.permissions();
+
+                if p.readonly() {
+                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("`{}` is readonly.", file_path.to_str().unwrap()),
+                    )));
+                }
+
+                file_size = metadata.len();
+
+                match file_path.parent() {
+                    Some(parent) => {
+                        if self.rotate.is_some() {
+                            match fs::metadata(&parent) {
+                                Ok(m) => {
+                                    let p = m.permissions();
+                                    if p.readonly() {
+                                        return Err(PipeLoggerBuilderError::IOError(
+                                            io::Error::new(
+                                                io::ErrorKind::PermissionDenied,
+                                                format!(
+                                                    "`{}` is readonly.",
+                                                    parent.to_str().unwrap()
+                                                ),
+                                            ),
+                                        ));
+                                    }
+                                }
+                                Err(err) => {
+                                    return Err(PipeLoggerBuilderError::IOError(err));
+                                }
+                            }
+                        }
+                        parent
                     }
-                    file_size = m.len();
-                }
-                Err(err) => {
-                    return Err(PipeLoggerBuilderError::IOError(err));
+                    None => unreachable!(),
                 }
             }
-            match file_path.parent() {
-                Some(parent) => {
-                    if self.rotate.is_some() {
+            Err(_) => {
+                file_size = 0;
+
+                match file_path.parent() {
+                    Some(parent) => {
                         match fs::metadata(&parent) {
                             Ok(m) => {
                                 let p = m.permissions();
@@ -276,47 +304,26 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                                         format!("`{}` is readonly.", parent.to_str().unwrap()),
                                     )));
                                 }
+                                parent
                             }
                             Err(err) => {
                                 return Err(PipeLoggerBuilderError::IOError(err));
                             }
                         }
                     }
-                    parent
-                }
-                None => unreachable!(),
-            }
-        } else {
-            file_size = 0;
-            match file_path.parent() {
-                Some(parent) => {
-                    match fs::metadata(&parent) {
-                        Ok(m) => {
-                            let p = m.permissions();
-                            if p.readonly() {
-                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                                    io::ErrorKind::PermissionDenied,
-                                    format!("`{}` is readonly.", parent.to_str().unwrap()),
-                                )));
-                            }
-                            parent
-                        }
-                        Err(err) => {
-                            return Err(PipeLoggerBuilderError::IOError(err));
-                        }
+                    None => {
+                        return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()),
+                        )));
                     }
-                }
-                None => {
-                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()),
-                    )));
                 }
             }
         }
         .to_path_buf();
 
-        let file_name = Path::new(&file_path).file_name().unwrap().to_str().unwrap().to_string();
+        let file_name =
+            Path::new(file_path.as_ref()).file_name().unwrap().to_str().unwrap().to_string();
 
         let file_name_point_index = match file_name.rfind('.') {
             Some(index) => index,
@@ -383,7 +390,8 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             rotated_log_file_names
         };
 
-        let file = OpenOptions::new().create(true).write(true).append(true).open(&file_path)?;
+        let file =
+            OpenOptions::new().create(true).write(true).append(true).open(file_path.as_ref())?;
 
         Ok(PipeLogger {
             rotate: self.rotate,
@@ -391,7 +399,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             file: Some(file),
             file_name,
             file_name_point_index,
-            file_path,
+            file_path: file_path.into_owned(),
             file_size,
             folder_path,
             rotated_log_file_names,
