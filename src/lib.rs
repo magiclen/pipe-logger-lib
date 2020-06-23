@@ -385,7 +385,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                 }
             }
 
-            rotated_log_file_names.sort();
+            rotated_log_file_names.sort_unstable();
 
             rotated_log_file_names
         };
