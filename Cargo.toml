@@ -1,6 +1,6 @@
 [package]
 name = "pipe-logger-lib"
-version = "1.1.10"
+version = "1.1.11"
 authors = ["Magic Len <len@magiclen.org>"]
 edition = "2018"
 repository = "https://github.com/magiclen/pipe-logger-lib"
@@ -10,6 +10,7 @@ categories = ["development-tools::debugging"]
 description= "Stores, rotates, compresses process logs."
 readme = "README.md"
 license = "MIT"
+include = ["src/**/*", "Cargo.toml"]
 
 [badges.travis-ci]
 repository = "magiclen/pipe-logger-lib"
