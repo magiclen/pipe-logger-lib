@@ -36,4 +36,5 @@ jobs:
           override: true
       - run: cargo build --release
       - run: cargo test --release
+      - run: cargo test --no-default-features --features=gzip --release
       - run: cargo doc --release

@@ -10,6 +10,10 @@ use pipe_logger_lib::*;
 
 const LOG_FILE_NAME: &str = "logfile.log";
 const WAIT_DURATION_MILLI_SECONDS: u64 = 1000;
+#[cfg(feature = "gzip")]
+const FILEX_EXT: &str = ".gz";
+#[cfg(feature = "xz")]
+const FILEX_EXT: &str = ".xz";
 
 static mut LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
 
@@ -17,8 +21,7 @@ fn create_test_folder() -> PathBuf {
     let test_folder_name =
         { unsafe { LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst) }.to_string() };
 
-    let folder =
-        Path::join(&Path::join(Path::new("tests"), Path::new("out")), Path::new(&test_folder_name));
+    let folder = Path::new("tests").join("out").join(&test_folder_name);
 
     fs::create_dir_all(&folder).unwrap();
 
@@ -29,7 +32,7 @@ fn create_test_folder() -> PathBuf {
 fn build() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let builder = PipeLoggerBuilder::new(&test_log_path);
@@ -48,7 +51,7 @@ fn build() {
 fn write() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let builder = PipeLoggerBuilder::new(&test_log_path);
@@ -69,7 +72,7 @@ fn write() {
 fn write_line() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let builder = PipeLoggerBuilder::new(&test_log_path);
@@ -90,7 +93,7 @@ fn write_line() {
 fn write_twice() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let builder = PipeLoggerBuilder::new(&test_log_path);
@@ -112,7 +115,7 @@ fn write_twice() {
 fn write_tee_out() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let mut builder = PipeLoggerBuilder::new(&test_log_path);
@@ -136,7 +139,7 @@ fn write_tee_out() {
 fn write_tee_err() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     {
         let mut builder = PipeLoggerBuilder::new(&test_log_path);
@@ -160,7 +163,7 @@ fn write_tee_err() {
 fn write_rotate() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     let new_file = {
         let mut builder = PipeLoggerBuilder::new(&test_log_path);
@@ -192,7 +195,7 @@ fn write_rotate() {
 fn write_rotate_with_count() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     let new_file = {
         let mut builder = PipeLoggerBuilder::new(&test_log_path);
@@ -242,7 +245,7 @@ fn write_rotate_with_count() {
 fn write_rotate_with_compress() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     let mut new_files = Vec::new();
 
@@ -288,7 +291,7 @@ fn write_rotate_with_compress() {
     for new_file in new_files {
         assert!(new_file.exists());
 
-        assert!(new_file.to_str().unwrap().ends_with(".xz"));
+        assert!(new_file.to_str().unwrap().ends_with(FILEX_EXT));
     }
 
     fs::remove_dir_all(test_folder).unwrap();
@@ -298,7 +301,7 @@ fn write_rotate_with_compress() {
 fn write_rotate_with_count_compress() {
     let test_folder = create_test_folder();
 
-    let test_log_path = Path::join(&test_folder, Path::new(LOG_FILE_NAME));
+    let test_log_path = test_folder.join(LOG_FILE_NAME);
 
     let mut new_files = Vec::new();
 
@@ -345,7 +348,7 @@ fn write_rotate_with_count_compress() {
     for new_file in new_files.iter().skip(2) {
         assert!(new_file.exists());
 
-        assert!(new_file.to_str().unwrap().ends_with(".xz"));
+        assert!(new_file.to_str().unwrap().ends_with(FILEX_EXT));
     }
 
     fs::remove_dir_all(test_folder).unwrap();

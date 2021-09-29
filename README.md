@@ -3,7 +3,9 @@ Pipe Logger Lib
 
 [![CI](https://github.com/magiclen/pipe-logger-lib/actions/workflows/ci.yml/badge.svg)](https://github.com/magiclen/pipe-logger-lib/actions/workflows/ci.yml)
 
-Stores, rotates, compresses process logs.
+Stores, rotates, compresses process logs. `xz` library is used for a compression by default. 
+But there exists an option to use `gzip` by passing flags `--no-default-features --features=gzip`
+to cargo.
 
 ## Example
 
@@ -16,7 +18,7 @@ use std::fs;
 use std::path::Path;
 
 let test_folder = {
-  let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), "log-example");
+  let folder = Path::new("tests").join("out").join("log-example");
 
   fs::remove_dir_all(&folder);
 
@@ -25,7 +27,7 @@ let test_folder = {
   folder
 };
 
-let test_log_file = Path::join(&test_folder, Path::new("mylog.txt"));
+let test_log_file = test_folder.join("mylog.txt");
 
 let mut builder = PipeLoggerBuilder::new(&test_log_file);
 

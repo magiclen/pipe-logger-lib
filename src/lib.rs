@@ -75,7 +75,6 @@ Rotate again!
 extern crate chrono;
 extern crate path_absolutize;
 extern crate regex;
-extern crate xz2;
 
 mod rotate_method;
 
@@ -94,10 +93,18 @@ use path_absolutize::*;
 
 use regex::Regex;
 
-use xz2::write::XzEncoder;
+#[cfg(feature = "gzip")]
+use libflate::gzip::Encoder;
+#[cfg(feature = "xz")]
+use xz2::write::XzEncoder as Encoder;
 
 const BUFFER_SIZE: usize = 4096 * 4;
 const FILE_WAIT_MILLI_SECONDS: u64 = 30;
+
+#[cfg(feature = "gzip")]
+const FILEX_EXT: &str = ".gz";
+#[cfg(feature = "xz")]
+const FILEX_EXT: &str = ".xz";
 
 // TODO -----PipeLoggerBuilder START-----
 
@@ -124,12 +131,10 @@ impl Display for PipeLoggerBuilderError {
                 f.write_str("A valid count of log files needs bigger than 0.")
             }
             PipeLoggerBuilderError::IOError(err) => Display::fmt(err, f),
-            PipeLoggerBuilderError::FileIsDirectory(path) => {
-                f.write_fmt(format_args!(
-                    "A log file cannot be a directory. The path of that file is `{}`.",
-                    path.to_string_lossy()
-                ))
-            }
+            PipeLoggerBuilderError::FileIsDirectory(path) => f.write_fmt(format_args!(
+                "A log file cannot be a directory. The path of that file is `{}`.",
+                path.to_string_lossy()
+            )),
         }
     }
 }
@@ -294,23 +299,21 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                 file_size = 0;
 
                 match file_path.parent() {
-                    Some(parent) => {
-                        match fs::metadata(&parent) {
-                            Ok(m) => {
-                                let p = m.permissions();
-                                if p.readonly() {
-                                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                                        io::ErrorKind::PermissionDenied,
-                                        format!("`{}` is readonly.", parent.to_str().unwrap()),
-                                    )));
-                                }
-                                parent
+                    Some(parent) => match fs::metadata(&parent) {
+                        Ok(m) => {
+                            let p = m.permissions();
+                            if p.readonly() {
+                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                                    io::ErrorKind::PermissionDenied,
+                                    format!("`{}` is readonly.", parent.to_str().unwrap()),
+                                )));
                             }
-                            Err(err) => {
-                                return Err(PipeLoggerBuilderError::IOError(err));
-                            }
+                            parent
                         }
-                    }
+                        Err(err) => {
+                            return Err(PipeLoggerBuilderError::IOError(err));
+                        }
+                    },
                     None => {
                         return Err(PipeLoggerBuilderError::IOError(io::Error::new(
                             io::ErrorKind::NotFound,
@@ -375,7 +378,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
                 if ext.eq(&file_name[file_name_point_index..]) {
                     rotated_log_file_names.push(rotated_log_file_name.to_string());
-                } else if ext.eq(".xz")
+                } else if ext.eq(FILEX_EXT)
                     && rotated_log_file_name[..rotated_log_file_name_point_index]
                         .ends_with(&file_name[file_name_point_index..])
                 {
@@ -515,7 +518,7 @@ impl PipeLogger {
 
                         if self.compress {
                             let rotated_log_file_name_compressed =
-                                format!("{}.xz", rotated_log_file_name);
+                                format!("{}{}", rotated_log_file_name, FILEX_EXT);
                             let rotated_log_file_compressed = Path::join(
                                 &self.folder_path,
                                 Path::new(&rotated_log_file_name_compressed),
@@ -524,21 +527,17 @@ impl PipeLogger {
 
                             let tee = self.tee.clone();
 
-                            let print_err = move |s| {
-                                match tee {
-                                    Some(tee) => {
-                                        match tee {
-                                            Tee::Stdout => {
-                                                eprintln!("{}", s);
-                                            }
-                                            Tee::Stderr => {
-                                                println!("{}", s);
-                                            }
-                                        }
-                                    }
-                                    None => {
+                            let print_err = move |s| match tee {
+                                Some(tee) => match tee {
+                                    Tee::Stdout => {
                                         eprintln!("{}", s);
                                     }
+                                    Tee::Stderr => {
+                                        println!("{}", s);
+                                    }
+                                },
+                                None => {
+                                    eprintln!("{}", s);
                                 }
                             };
 
@@ -547,12 +546,17 @@ impl PipeLogger {
                                     Ok(file_w) => {
                                         match File::open(&rotated_log_file) {
                                             Ok(mut file_r) => {
-                                                let mut compressor = XzEncoder::new(file_w, 9);
+                                                #[cfg(feature = "xz")]
+                                                let mut compressor = Encoder::new(file_w, 9);
+                                                #[cfg(feature = "gzip")]
+                                                let mut compressor = Encoder::new(file_w).unwrap();
                                                 let mut buffer = [0u8; BUFFER_SIZE];
                                                 loop {
                                                     match file_r.read(&mut buffer) {
                                                         Ok(c) => {
                                                             if c == 0 {
+                                                                #[cfg(feature = "gzip")]
+                                                                compressor.finish();
                                                                 drop(file_r);
                                                                 if fs::remove_file(
                                                                     &rotated_log_file,
@@ -632,7 +636,7 @@ impl PipeLogger {
                                 {}
 
                                 let p_compressed_name = {
-                                    rotated_log_file_name.push_str(".xz");
+                                    rotated_log_file_name.push_str(FILEX_EXT);
 
                                     rotated_log_file_name
                                 };
@@ -650,7 +654,7 @@ impl PipeLogger {
 
                         new_file = if self.compress {
                             let mut s = rotated_log_file.into_os_string();
-                            s.push(".xz");
+                            s.push(FILEX_EXT);
                             Some(PathBuf::from(s))
                         } else {
                             Some(rotated_log_file)
@@ -699,16 +703,14 @@ impl PipeLogger {
         let s = text.as_ref();
 
         match &self.tee {
-            Some(tee) => {
-                match tee {
-                    Tee::Stdout => {
-                        print!("{}", s);
-                    }
-                    Tee::Stderr => {
-                        eprint!("{}", s);
-                    }
+            Some(tee) => match tee {
+                Tee::Stdout => {
+                    print!("{}", s);
                 }
-            }
+                Tee::Stderr => {
+                    eprint!("{}", s);
+                }
+            },
             None => (),
         }
     }
