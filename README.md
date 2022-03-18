@@ -8,8 +8,6 @@ Stores, rotates, compresses process logs.
 ## Example
 
 ```rust
-extern crate pipe_logger_lib;
-
 use pipe_logger_lib::*;
 
 use std::fs;

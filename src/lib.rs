@@ -5,8 +5,6 @@ Stores, rotates, compresses process logs.
 ## Example
 
 ```rust
-extern crate pipe_logger_lib;
-
 use pipe_logger_lib::*;
 
 use std::fs;
@@ -71,11 +69,6 @@ Other logs...
 Rotate again!
 ```
 */
-
-extern crate chrono;
-extern crate path_absolutize;
-extern crate regex;
-extern crate xz2;
 
 mod rotate_method;
 
