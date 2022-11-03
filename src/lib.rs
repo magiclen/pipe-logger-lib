@@ -258,7 +258,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                 match file_path.parent() {
                     Some(parent) => {
                         if self.rotate.is_some() {
-                            match fs::metadata(&parent) {
+                            match fs::metadata(parent) {
                                 Ok(m) => {
                                     let p = m.permissions();
                                     if p.readonly() {
@@ -288,7 +288,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
                 match file_path.parent() {
                     Some(parent) => {
-                        match fs::metadata(&parent) {
+                        match fs::metadata(parent) {
                             Ok(m) => {
                                 let p = m.permissions();
                                 if p.readonly() {
@@ -632,7 +632,7 @@ impl PipeLogger {
 
                                 let p_compressed =
                                     Path::join(&self.folder_path, Path::new(&p_compressed_name));
-                                if fs::remove_file(&p_compressed).is_err() {}
+                                if fs::remove_file(p_compressed).is_err() {}
                             }
                         }
 
