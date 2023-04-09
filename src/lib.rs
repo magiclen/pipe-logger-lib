@@ -72,21 +72,20 @@ Rotate again!
 
 mod rotate_method;
 
-pub use rotate_method::RotateMethod;
-
-use std::error::Error;
-use std::fmt::{Display, Error as FmtError, Formatter};
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
+use std::{
+    error::Error,
+    fmt::{Display, Error as FmtError, Formatter},
+    fs::{self, File, OpenOptions},
+    io::{self, Read, Write},
+    path::{Path, PathBuf},
+    thread,
+    time::Duration,
+};
 
 use chrono::prelude::*;
 use path_absolutize::*;
-
 use regex::Regex;
-
+pub use rotate_method::RotateMethod;
 use xz2::write::XzEncoder;
 
 const BUFFER_SIZE: usize = 4096 * 4;
@@ -112,17 +111,15 @@ impl Display for PipeLoggerBuilderError {
         match self {
             PipeLoggerBuilderError::RotateFileSizeTooSmall => {
                 f.write_str("A valid rotated file size needs bigger than 1.")
-            }
+            },
             PipeLoggerBuilderError::CountTooSmall => {
                 f.write_str("A valid count of log files needs bigger than 0.")
-            }
+            },
             PipeLoggerBuilderError::IOError(err) => Display::fmt(err, f),
-            PipeLoggerBuilderError::FileIsDirectory(path) => {
-                f.write_fmt(format_args!(
-                    "A log file cannot be a directory. The path of that file is `{}`.",
-                    path.to_string_lossy()
-                ))
-            }
+            PipeLoggerBuilderError::FileIsDirectory(path) => f.write_fmt(format_args!(
+                "A log file cannot be a directory. The path of that file is `{}`.",
+                path.to_string_lossy()
+            )),
         }
     }
 }
@@ -155,11 +152,11 @@ pub enum Tee {
 #[derive(Debug)]
 /// To build a PipeLogger instance.
 pub struct PipeLoggerBuilder<P: AsRef<Path>> {
-    rotate: Option<RotateMethod>,
-    count: Option<usize>,
+    rotate:   Option<RotateMethod>,
+    count:    Option<usize>,
     log_path: P,
     compress: bool,
-    tee: Option<Tee>,
+    tee:      Option<Tee>,
 }
 
 impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
@@ -224,7 +221,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                     if *file_size < 2 {
                         return Err(PipeLoggerBuilderError::RotateFileSizeTooSmall);
                     }
-                }
+                },
             }
 
             if let Some(count) = &self.count {
@@ -272,46 +269,44 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
                                             ),
                                         ));
                                     }
-                                }
+                                },
                                 Err(err) => {
                                     return Err(PipeLoggerBuilderError::IOError(err));
-                                }
+                                },
                             }
                         }
                         parent
-                    }
+                    },
                     None => unreachable!(),
                 }
-            }
+            },
             Err(_) => {
                 file_size = 0;
 
                 match file_path.parent() {
-                    Some(parent) => {
-                        match fs::metadata(parent) {
-                            Ok(m) => {
-                                let p = m.permissions();
-                                if p.readonly() {
-                                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                                        io::ErrorKind::PermissionDenied,
-                                        format!("`{}` is readonly.", parent.to_str().unwrap()),
-                                    )));
-                                }
-                                parent
+                    Some(parent) => match fs::metadata(parent) {
+                        Ok(m) => {
+                            let p = m.permissions();
+                            if p.readonly() {
+                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(
+                                    io::ErrorKind::PermissionDenied,
+                                    format!("`{}` is readonly.", parent.to_str().unwrap()),
+                                )));
                             }
-                            Err(err) => {
-                                return Err(PipeLoggerBuilderError::IOError(err));
-                            }
-                        }
-                    }
+                            parent
+                        },
+                        Err(err) => {
+                            return Err(PipeLoggerBuilderError::IOError(err));
+                        },
+                    },
                     None => {
                         return Err(PipeLoggerBuilderError::IOError(io::Error::new(
                             io::ErrorKind::NotFound,
                             format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()),
                         )));
-                    }
+                    },
                 }
-            }
+            },
         }
         .to_path_buf();
 
@@ -409,18 +404,18 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
 
 /// PipeLogger can help you stores, rotates and compresses logs.
 pub struct PipeLogger {
-    rotate: Option<RotateMethod>,
-    count: Option<usize>,
-    file: Option<File>,
-    file_name: String,
-    file_name_point_index: usize,
-    file_path: PathBuf,
-    file_size: u64,
-    folder_path: PathBuf,
+    rotate:                 Option<RotateMethod>,
+    count:                  Option<usize>,
+    file:                   Option<File>,
+    file_name:              String,
+    file_name_point_index:  usize,
+    file_path:              PathBuf,
+    file_size:              u64,
+    folder_path:            PathBuf,
     rotated_log_file_names: Vec<String>,
-    compress: bool,
-    tee: Option<Tee>,
-    last_rotated_time: i64,
+    compress:               bool,
+    tee:                    Option<Tee>,
+    last_rotated_time:      i64,
 }
 
 impl Write for PipeLogger {
@@ -517,22 +512,18 @@ impl PipeLogger {
 
                             let tee = self.tee.clone();
 
-                            let print_err = move |s| {
-                                match tee {
-                                    Some(tee) => {
-                                        match tee {
-                                            Tee::Stdout => {
-                                                eprintln!("{}", s);
-                                            }
-                                            Tee::Stderr => {
-                                                println!("{}", s);
-                                            }
-                                        }
-                                    }
-                                    None => {
+                            let print_err = move |s| match tee {
+                                Some(tee) => match tee {
+                                    Tee::Stdout => {
                                         eprintln!("{}", s);
-                                    }
-                                }
+                                    },
+                                    Tee::Stderr => {
+                                        println!("{}", s);
+                                    },
+                                },
+                                None => {
+                                    eprintln!("{}", s);
+                                },
                             };
 
                             thread::spawn(move || {
@@ -558,16 +549,20 @@ impl PipeLogger {
                                                             match compressor.write(&buffer[..c]) {
                                                                 Ok(cc) => {
                                                                     if c != cc {
-                                                                        print_err("The space is not enough.".to_string());
+                                                                        print_err(
+                                                                            "The space is not \
+                                                                             enough."
+                                                                                .to_string(),
+                                                                        );
                                                                         break;
                                                                     }
-                                                                }
+                                                                },
                                                                 Err(err) => {
                                                                     print_err(err.to_string());
                                                                     break;
-                                                                }
+                                                                },
                                                             }
-                                                        }
+                                                        },
                                                         Err(ref err)
                                                             if err.kind()
                                                                 == io::ErrorKind::NotFound =>
@@ -581,14 +576,14 @@ impl PipeLogger {
                                                             {
                                                             }
                                                             break;
-                                                        }
+                                                        },
                                                         Err(err) => {
                                                             print_err(err.to_string());
                                                             break;
-                                                        }
+                                                        },
                                                     }
                                                 }
-                                            }
+                                            },
                                             Err(ref err)
                                                 if err.kind() == io::ErrorKind::NotFound =>
                                             {
@@ -598,15 +593,15 @@ impl PipeLogger {
                                                     .is_err()
                                                 {
                                                 }
-                                            }
+                                            },
                                             Err(err) => {
                                                 print_err(err.to_string());
-                                            }
+                                            },
                                         }
-                                    }
+                                    },
                                     Err(err) => {
                                         print_err(err.to_string());
-                                    }
+                                    },
                                 };
                             });
                         }
@@ -649,7 +644,7 @@ impl PipeLogger {
                             Some(rotated_log_file)
                         };
                     }
-                }
+                },
             }
         }
 
@@ -679,7 +674,7 @@ impl PipeLogger {
                     }
 
                     self.file_size += 1u64;
-                }
+                },
                 None => unreachable!(),
             }
             self.print("\n");
@@ -692,16 +687,14 @@ impl PipeLogger {
         let s = text.as_ref();
 
         match &self.tee {
-            Some(tee) => {
-                match tee {
-                    Tee::Stdout => {
-                        print!("{}", s);
-                    }
-                    Tee::Stderr => {
-                        eprint!("{}", s);
-                    }
-                }
-            }
+            Some(tee) => match tee {
+                Tee::Stdout => {
+                    print!("{}", s);
+                },
+                Tee::Stderr => {
+                    eprint!("{}", s);
+                },
+            },
             None => (),
         }
     }
