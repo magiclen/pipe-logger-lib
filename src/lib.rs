@@ -82,7 +82,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::prelude::*;
+use chrono::{DateTime, Utc};
 use path_absolutize::*;
 use regex::Regex;
 pub use rotate_method::RotateMethod;
