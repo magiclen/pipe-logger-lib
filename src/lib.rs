@@ -321,7 +321,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
         let rotated_log_file_names = {
             let mut rotated_log_file_names = Vec::new();
 
-            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{6}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.3f
+            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{3}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.3f
 
             let file_name_without_extension = &file_name[..file_name_point_index];
 
