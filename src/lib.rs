@@ -543,6 +543,7 @@ impl PipeLogger {
                                                                 )
                                                                 .is_err()
                                                                 {
+                                                                    // do nothing
                                                                 }
                                                                 break;
                                                             }
@@ -574,6 +575,7 @@ impl PipeLogger {
                                                             )
                                                             .is_err()
                                                             {
+                                                                // do nothing
                                                             }
                                                             break;
                                                         },
@@ -617,7 +619,9 @@ impl PipeLogger {
                                     Path::new(&rotated_log_file_name),
                                 ))
                                 .is_err()
-                                {}
+                                {
+                                    // do nothing
+                                }
 
                                 let p_compressed_name = {
                                     rotated_log_file_name.push_str(".xz");
