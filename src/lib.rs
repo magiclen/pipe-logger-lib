@@ -378,8 +378,7 @@ impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
             rotated_log_file_names
         };
 
-        let file =
-            OpenOptions::new().create(true).write(true).append(true).open(file_path.as_ref())?;
+        let file = OpenOptions::new().create(true).append(true).open(file_path.as_ref())?;
 
         Ok(PipeLogger {
             rotate: self.rotate,
@@ -690,16 +689,15 @@ impl PipeLogger {
     fn print<S: AsRef<str>>(&self, text: S) {
         let s = text.as_ref();
 
-        match &self.tee {
-            Some(tee) => match tee {
+        if let Some(tee) = &self.tee {
+            match tee {
                 Tee::Stdout => {
                     print!("{}", s);
                 },
                 Tee::Stderr => {
                     eprint!("{}", s);
                 },
-            },
-            None => (),
+            }
         }
     }
 }

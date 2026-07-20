@@ -11,11 +11,10 @@ use pipe_logger_lib::*;
 const LOG_FILE_NAME: &str = "logfile.log";
 const WAIT_DURATION_MILLI_SECONDS: u64 = 1000;
 
-static mut LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
+static LAST_TEST_FOLDER_TIME: AtomicUsize = AtomicUsize::new(0);
 
 fn create_test_folder() -> PathBuf {
-    let test_folder_name =
-        { unsafe { LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst) }.to_string() };
+    let test_folder_name = { LAST_TEST_FOLDER_TIME.fetch_add(1, Ordering::SeqCst).to_string() };
 
     let folder =
         Path::join(&Path::join(Path::new("tests"), Path::new("out")), Path::new(&test_folder_name));
