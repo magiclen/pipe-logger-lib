@@ -1,9 +1,9 @@
 [package]
 name = "pipe-logger-lib"
-version = "1.1.17"
+version = "2.0.0"
 authors = ["Magic Len <len@magiclen.org>"]
-edition = "2021"
-rust-version = "1.61"
+edition = "2024"
+rust-version = "1.89"
 repository = "https://github.com/magiclen/pipe-logger-lib"
 homepage = "https://magiclen.org/pipe-logger-lib"
 keywords = ["logger", "log", "pipe", "rotation", "logrotate"]
@@ -13,7 +13,6 @@ license = "MIT"
 include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
-chrono = { version = "0.4.24", default-features = false, features = ["clock"] }
-regex = "1.0.5"
-xz2 = "0.1.5"
-path-absolutize = "3"
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+liblzma = "0.4"
+path-absolutize = "4"

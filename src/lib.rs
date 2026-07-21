@@ -1,705 +1,566 @@
 /*!
 # Pipe Logger Lib
-Stores, rotates, compresses process logs.
+
+Stores, rotates, and compresses process logs.
+
+`count` includes the active log file, so a count of 10 keeps up to 9 rotated files.
+
+Call [`PipeLogger::flush`] to wait for queued compression work while keeping the logger open.
+
+Call [`PipeLogger::finish`] to wait for queued compression work and report its final result.
 
 ## Example
 
-```rust
-use pipe_logger_lib::*;
+```rust,no_run
+use std::{error::Error, fs, path::Path};
 
-use std::fs;
-use std::path::Path;
+use pipe_logger_lib::{CompressionMethod, PipeLoggerBuilder, RotateMethod, Tee};
 
-let test_folder = {
-  let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), "log-example");
+fn main() -> Result<(), Box<dyn Error>> {
+    let folder = Path::new("logs");
 
-  fs::remove_dir_all(&folder);
+    fs::create_dir_all(folder)?;
 
-  fs::create_dir_all(&folder).unwrap();
+    let mut builder = PipeLoggerBuilder::new(folder.join("application.log"));
 
-  folder
-};
+    builder
+        .set_tee(Some(Tee::Stdout))
+        .set_rotate(Some(RotateMethod::FileSize(1024 * 1024)))
+        .set_count(Some(10))
+        .set_compression(Some(CompressionMethod::Xz(6)));
 
-let test_log_file = Path::join(&test_folder, Path::new("mylog.txt"));
+    let mut logger = builder.build()?;
 
-let mut builder = PipeLoggerBuilder::new(&test_log_file);
+    logger.write_line("The application started.")?;
+    logger.finish()?;
 
-builder
-    .set_tee(Some(Tee::Stdout))
-    .set_rotate(Some(RotateMethod::FileSize(30))) // bytes
-    .set_count(Some(10))
-    .set_compress(false);
-
-{
-    let mut logger = builder.build().unwrap();
-
-    logger.write_line("Hello world!").unwrap();
-
-    let rotated_log_file_1 = logger.write_line("This is a convenient logger.").unwrap().unwrap();
-
-    logger.write_line("Other logs...").unwrap();
-    logger.write_line("Other logs...").unwrap();
-
-    let rotated_log_file_2 = logger.write_line("Rotate again!").unwrap().unwrap();
-
-    logger.write_line("Ops!").unwrap();
+    Ok(())
 }
-
-fs::remove_dir_all(test_folder).unwrap();
-```
-
-Now, the contents of `test_log_file` are,
-
-```text
-Ops!
-```
-
-The contents of `rotated_log_file_1` are,
-
-```text
-Hello world!
-This is a convenient logger.
-```
-
-The contents of `rotated_log_file_2` are,
-
-```text
-Other logs...
-Other logs...
-Rotate again!
 ```
 */
 
+mod build_error;
+mod compression_method;
+mod compression_worker;
 mod rotate_method;
+mod rotated_file;
 
 use std::{
-    error::Error,
-    fmt::{Display, Error as FmtError, Formatter},
+    collections::VecDeque,
+    ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
-    thread,
-    time::Duration,
 };
 
-use chrono::{DateTime, Utc};
-use path_absolutize::*;
-use regex::Regex;
+pub use build_error::BuildError;
+pub use compression_method::CompressionMethod;
+use compression_worker::CompressionWorker;
+use path_absolutize::Absolutize;
 pub use rotate_method::RotateMethod;
-use xz2::write::XzEncoder;
+use rotated_file::{RotatedFile, create_rotated_file, scan_rotated_files};
 
-const BUFFER_SIZE: usize = 4096 * 4;
-const FILE_WAIT_MILLI_SECONDS: u64 = 30;
-
-// TODO -----PipeLoggerBuilder START-----
-
-#[derive(Debug)]
-pub enum PipeLoggerBuilderError {
-    /// A valid rotated file size needs bigger than 1.
-    RotateFileSizeTooSmall,
-    /// A valid count of log files needs bigger than 0.
-    CountTooSmall,
-    /// std::io::Error.
-    IOError(io::Error),
-    /// A log file cannot be a directory. Wrap the absolutized log file.
-    FileIsDirectory(PathBuf),
-}
-
-impl Display for PipeLoggerBuilderError {
-    #[inline]
-    fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-        match self {
-            PipeLoggerBuilderError::RotateFileSizeTooSmall => {
-                f.write_str("A valid rotated file size needs bigger than 1.")
-            },
-            PipeLoggerBuilderError::CountTooSmall => {
-                f.write_str("A valid count of log files needs bigger than 0.")
-            },
-            PipeLoggerBuilderError::IOError(err) => Display::fmt(err, f),
-            PipeLoggerBuilderError::FileIsDirectory(path) => f.write_fmt(format_args!(
-                "A log file cannot be a directory. The path of that file is `{}`.",
-                path.to_string_lossy()
-            )),
-        }
-    }
-}
-
-impl Error for PipeLoggerBuilderError {}
-
-impl From<io::Error> for PipeLoggerBuilderError {
-    #[inline]
-    fn from(err: io::Error) -> Self {
-        PipeLoggerBuilderError::IOError(err)
-    }
-}
-
-impl From<PathBuf> for PipeLoggerBuilderError {
-    #[inline]
-    fn from(err: PathBuf) -> Self {
-        PipeLoggerBuilderError::FileIsDirectory(err)
-    }
-}
-
-#[derive(Debug, Clone)]
-/// Read from standard input and write to standard output.
+/// The output stream that receives a copy of every log write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tee {
-    /// To stdout.
+    /// Write a copy to standard output.
     Stdout,
-    /// To stderr.
+    /// Write a copy to standard error.
     Stderr,
 }
 
-#[derive(Debug)]
-/// To build a PipeLogger instance.
-pub struct PipeLoggerBuilder<P: AsRef<Path>> {
-    rotate:   Option<RotateMethod>,
-    count:    Option<usize>,
-    log_path: P,
-    compress: bool,
-    tee:      Option<Tee>,
+/// A builder for [`PipeLogger`].
+#[derive(Debug, Clone)]
+pub struct PipeLoggerBuilder {
+    rotate:      Option<RotateMethod>,
+    count:       Option<usize>,
+    log_path:    PathBuf,
+    compression: Option<CompressionMethod>,
+    tee:         Option<Tee>,
 }
 
-impl<P: AsRef<Path>> PipeLoggerBuilder<P> {
-    /// Create a new PipeLoggerBuilder.
-    pub fn new(log_path: P) -> PipeLoggerBuilder<P> {
-        PipeLoggerBuilder {
-            rotate: None,
-            count: None,
-            log_path,
-            compress: false,
-            tee: None,
+impl PipeLoggerBuilder {
+    /// Creates a builder for the given log path.
+    #[inline]
+    pub fn new(log_path: impl AsRef<Path>) -> Self {
+        Self {
+            rotate:      None,
+            count:       None,
+            log_path:    log_path.as_ref().to_path_buf(),
+            compression: None,
+            tee:         None,
         }
     }
 
-    pub fn rotate(&self) -> &Option<RotateMethod> {
-        &self.rotate
+    /// Returns the rotation method.
+    #[inline]
+    pub const fn rotate(&self) -> Option<RotateMethod> {
+        self.rotate
     }
 
-    pub fn count(&self) -> &Option<usize> {
-        &self.count
+    /// Returns the total number of log files to keep.
+    #[inline]
+    pub const fn count(&self) -> Option<usize> {
+        self.count
     }
 
-    pub fn log_path(&self) -> &P {
+    /// Returns the log path.
+    #[inline]
+    pub fn log_path(&self) -> &Path {
         &self.log_path
     }
 
-    /// Whether to compress the rotated log files through xz.
-    pub fn compress(&self) -> bool {
-        self.compress
+    /// Returns the compression method.
+    #[inline]
+    pub const fn compression(&self) -> Option<CompressionMethod> {
+        self.compression
     }
 
-    pub fn tee(&self) -> &Option<Tee> {
-        &self.tee
+    /// Returns the tee output stream.
+    #[inline]
+    pub const fn tee(&self) -> Option<Tee> {
+        self.tee
     }
 
-    pub fn set_rotate(&mut self, rotate: Option<RotateMethod>) -> &mut Self {
+    /// Sets the rotation method.
+    #[inline]
+    pub const fn set_rotate(&mut self, rotate: Option<RotateMethod>) -> &mut Self {
         self.rotate = rotate;
         self
     }
 
-    pub fn set_count(&mut self, count: Option<usize>) -> &mut Self {
+    /// Sets the total number of log files to keep.
+    #[inline]
+    pub const fn set_count(&mut self, count: Option<usize>) -> &mut Self {
         self.count = count;
         self
     }
 
-    /// Whether to compress the rotated log files through xz.
-    pub fn set_compress(&mut self, compress: bool) -> &mut Self {
-        self.compress = compress;
+    /// Sets the compression method.
+    #[inline]
+    pub const fn set_compression(&mut self, compression: Option<CompressionMethod>) -> &mut Self {
+        self.compression = compression;
         self
     }
 
-    pub fn set_tee(&mut self, tee: Option<Tee>) -> &mut Self {
+    /// Sets the tee output stream.
+    #[inline]
+    pub const fn set_tee(&mut self, tee: Option<Tee>) -> &mut Self {
         self.tee = tee;
         self
     }
 
-    /// Build a new PipeLogger.
-    pub fn build(self) -> Result<PipeLogger, PipeLoggerBuilderError> {
-        if let Some(rotate) = &self.rotate {
-            match rotate {
-                RotateMethod::FileSize(file_size) => {
-                    if *file_size < 2 {
-                        return Err(PipeLoggerBuilderError::RotateFileSizeTooSmall);
-                    }
-                },
+    /// Builds a logger.
+    pub fn build(self) -> Result<PipeLogger, BuildError> {
+        // validate
+        {
+            if matches!(self.rotate, Some(RotateMethod::FileSize(0))) {
+                return Err(BuildError::RotateFileSizeZero);
             }
 
-            if let Some(count) = &self.count {
-                if *count < 1 {
-                    return Err(PipeLoggerBuilderError::CountTooSmall);
-                }
+            if self.count == Some(0) {
+                return Err(BuildError::CountZero);
+            }
+
+            if self.count.is_some() && self.rotate.is_none() {
+                return Err(BuildError::CountWithoutRotation);
+            }
+
+            if self.compression.is_some() && self.rotate.is_none() {
+                return Err(BuildError::CompressionWithoutRotation);
+            }
+
+            if let Some(CompressionMethod::Xz(level)) = self.compression
+                && level > 9
+            {
+                return Err(BuildError::InvalidXzCompressionLevel(level));
             }
         }
 
-        let file_path = self.log_path.as_ref().absolutize()?;
+        let file_path = self.log_path.absolutize()?.into_owned();
 
-        let file_size;
-
-        let folder_path = match file_path.metadata() {
-            Ok(metadata) => {
-                if metadata.is_dir() {
-                    return Err(PipeLoggerBuilderError::FileIsDirectory(file_path.into_owned()));
-                }
-
-                let p = metadata.permissions();
-
-                if p.readonly() {
-                    return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        format!("`{}` is readonly.", file_path.to_str().unwrap()),
-                    )));
-                }
-
-                file_size = metadata.len();
-
-                match file_path.parent() {
-                    Some(parent) => {
-                        if self.rotate.is_some() {
-                            match fs::metadata(parent) {
-                                Ok(m) => {
-                                    let p = m.permissions();
-                                    if p.readonly() {
-                                        return Err(PipeLoggerBuilderError::IOError(
-                                            io::Error::new(
-                                                io::ErrorKind::PermissionDenied,
-                                                format!(
-                                                    "`{}` is readonly.",
-                                                    parent.to_str().unwrap()
-                                                ),
-                                            ),
-                                        ));
-                                    }
-                                },
-                                Err(err) => {
-                                    return Err(PipeLoggerBuilderError::IOError(err));
-                                },
-                            }
-                        }
-                        parent
-                    },
-                    None => unreachable!(),
-                }
+        match fs::metadata(&file_path) {
+            Ok(metadata) if metadata.is_dir() => {
+                return Err(BuildError::LogPathIsDirectory(file_path));
             },
-            Err(_) => {
-                file_size = 0;
-
-                match file_path.parent() {
-                    Some(parent) => match fs::metadata(parent) {
-                        Ok(m) => {
-                            let p = m.permissions();
-                            if p.readonly() {
-                                return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                                    io::ErrorKind::PermissionDenied,
-                                    format!("`{}` is readonly.", parent.to_str().unwrap()),
-                                )));
-                            }
-                            parent
-                        },
-                        Err(err) => {
-                            return Err(PipeLoggerBuilderError::IOError(err));
-                        },
-                    },
-                    None => {
-                        return Err(PipeLoggerBuilderError::IOError(io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("`{}`'s parent does not exist.", file_path.to_str().unwrap()),
-                        )));
-                    },
-                }
-            },
+            Ok(_) => {},
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+            Err(error) => return Err(error.into()),
         }
-        .to_path_buf();
 
-        let file_name =
-            Path::new(file_path.as_ref()).file_name().unwrap().to_str().unwrap().to_string();
+        let folder_path = file_path
+            .parent()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "The log path has no parent folder.")
+            })?
+            .to_path_buf();
 
-        let file_name_point_index = match file_name.rfind('.') {
-            Some(index) => index,
-            None => file_name.len(),
+        let file_name = file_path
+            .file_name()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "The log path has no file name.")
+            })?
+            .to_os_string();
+
+        let lock_path = lock_path(&folder_path, &file_name);
+
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_path)?;
+
+        match lock_file.try_lock() {
+            Ok(()) => {},
+            Err(fs::TryLockError::WouldBlock) => {
+                return Err(BuildError::LogPathAlreadyInUse(file_path));
+            },
+            Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+
+        let file = OpenOptions::new().create(true).append(true).open(&file_path)?;
+        let file_size = file.metadata()?.len();
+
+        let mut rotated_files = if self.rotate.is_some() {
+            scan_rotated_files(&folder_path, &file_name)?
+        } else {
+            VecDeque::new()
         };
 
-        let rotated_log_file_names = {
-            let mut rotated_log_file_names = Vec::new();
+        let max_rotated_files = self.count.map_or(usize::MAX, |count| count - 1);
 
-            let re = Regex::new("^-[1-2][0-9]{3}(-[0-5][0-9]){5}-[0-9]{3}$").unwrap(); // -%Y-%m-%d-%H-%M-%S + $.3f
-
-            let file_name_without_extension = &file_name[..file_name_point_index];
-
-            for entry in folder_path.read_dir().unwrap().filter_map(|entry| entry.ok()) {
-                let rotated_log_file_path = entry.path();
-
-                if !rotated_log_file_path.is_file() {
-                    continue;
-                }
-
-                let rotated_log_file_name =
-                    Path::new(&rotated_log_file_path).file_name().unwrap().to_str().unwrap();
-
-                if !rotated_log_file_name.starts_with(file_name_without_extension) {
-                    continue;
-                }
-
-                let rotated_log_file_name_point_index = match rotated_log_file_name.rfind('.') {
-                    Some(index) => index,
-                    None => rotated_log_file_name.len(),
-                };
-
-                if rotated_log_file_name_point_index < file_name_point_index + 24 {
-                    // -%Y-%m-%d-%H-%M-%S + $.3f
-                    continue;
-                }
-
-                let file_name_without_extension_len = file_name_without_extension.len();
-
-                if !re.is_match(
-                    &rotated_log_file_name
-                        [file_name_without_extension_len..file_name_without_extension_len + 24],
-                ) {
-                    // -%Y-%m-%d-%H-%M-%S + $.3f
-                    continue;
-                }
-
-                let ext = &rotated_log_file_name[rotated_log_file_name_point_index..];
-
-                if ext.eq(&file_name[file_name_point_index..]) {
-                    rotated_log_file_names.push(rotated_log_file_name.to_string());
-                } else if ext.eq(".xz")
-                    && rotated_log_file_name[..rotated_log_file_name_point_index]
-                        .ends_with(&file_name[file_name_point_index..])
-                {
-                    rotated_log_file_names.push(
-                        rotated_log_file_name[..rotated_log_file_name_point_index].to_string(),
-                    );
-                }
-            }
-
-            rotated_log_file_names.sort_unstable();
-
-            rotated_log_file_names
+        let compression_worker = match self.compression {
+            Some(CompressionMethod::Xz(level)) => Some(CompressionWorker::start(
+                std::mem::take(&mut rotated_files),
+                max_rotated_files,
+                level,
+            )?),
+            None => {
+                enforce_retention(&mut rotated_files, max_rotated_files)?;
+                None
+            },
         };
-
-        let file = OpenOptions::new().create(true).append(true).open(file_path.as_ref())?;
 
         Ok(PipeLogger {
             rotate: self.rotate,
-            count: self.count,
+            max_rotated_files,
             file: Some(file),
-            file_name,
-            file_name_point_index,
-            file_path: file_path.into_owned(),
+            _lock_file: lock_file,
+            file_path,
             file_size,
             folder_path,
-            rotated_log_file_names,
-            compress: self.compress,
+            file_name,
+            rotated_files,
+            compression_worker,
             tee: self.tee,
-            last_rotated_time: 0,
+            finished: false,
         })
     }
 }
 
-// TODO -----PipeLoggerBuilder END-----
-
-// TODO -----PipeLogger START-----
-
-/// PipeLogger can help you stores, rotates and compresses logs.
+/// A file logger with optional rotation, retention, compression, and tee output.
 pub struct PipeLogger {
-    rotate:                 Option<RotateMethod>,
-    count:                  Option<usize>,
-    file:                   Option<File>,
-    file_name:              String,
-    file_name_point_index:  usize,
-    file_path:              PathBuf,
-    file_size:              u64,
-    folder_path:            PathBuf,
-    rotated_log_file_names: Vec<String>,
-    compress:               bool,
-    tee:                    Option<Tee>,
-    last_rotated_time:      i64,
-}
-
-impl Write for PipeLogger {
-    /// Write UTF-8 data.
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        PipeLogger::write(self, String::from_utf8_lossy(buf))?;
-
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match self.file {
-            Some(ref mut file) => file.flush(),
-            None => unreachable!(),
-        }
-    }
+    rotate:             Option<RotateMethod>,
+    max_rotated_files:  usize,
+    file:               Option<File>,
+    _lock_file:         File,
+    file_path:          PathBuf,
+    file_size:          u64,
+    folder_path:        PathBuf,
+    file_name:          OsString,
+    rotated_files:      VecDeque<RotatedFile>,
+    compression_worker: Option<CompressionWorker>,
+    tee:                Option<Tee>,
+    finished:           bool,
 }
 
 impl PipeLogger {
-    /// Create a new PipeLoggerBuilder.
-    pub fn builder<P: AsRef<Path>>(log_path: P) -> PipeLoggerBuilder<P> {
+    /// Creates a builder for the given log path.
+    #[inline]
+    pub fn builder(log_path: impl AsRef<Path>) -> PipeLoggerBuilder {
         PipeLoggerBuilder::new(log_path)
     }
 
-    /// Write a string. If the log is rotated, this method returns the renamed path.
-    pub fn write<S: AsRef<str>>(&mut self, text: S) -> io::Result<Option<PathBuf>> {
-        let s = text.as_ref();
+    /// Writes a string and rotates the log file when needed.
+    #[inline]
+    pub fn write_str(&mut self, text: &str) -> io::Result<Option<PathBuf>> {
+        self.write_bytes(text.as_bytes(), false)
+    }
 
-        let buf = s.as_bytes();
+    /// Writes a string and a newline, then rotates the log file when needed.
+    #[inline]
+    pub fn write_line(&mut self, text: &str) -> io::Result<Option<PathBuf>> {
+        self.write_bytes(text.as_bytes(), true)
+    }
 
-        let len = buf.len();
+    /// Flushes all output and waits for background work to finish.
+    #[inline]
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.flush_inner()
+    }
 
-        if len == 0 {
+    /// Flushes all output and stops the background worker.
+    #[inline]
+    pub fn finish(mut self) -> io::Result<()> {
+        self.finish_inner()
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8], append_newline: bool) -> io::Result<Option<PathBuf>> {
+        if bytes.is_empty() && !append_newline {
             return Ok(None);
         }
 
-        self.print(s);
+        write_tee(self.tee, bytes, append_newline)?;
 
-        let mut file = self.file.take().unwrap();
+        let write_result = (|| {
+            let file = self.file_mut()?;
 
-        let n = file.write(buf)?;
+            file.write_all(bytes)?;
 
-        self.file_size += n as u64;
-
-        let mut new_file = None;
-
-        if let Some(rotate) = &self.rotate {
-            match rotate {
-                RotateMethod::FileSize(size) => {
-                    if self.file_size >= *size {
-                        let utc: DateTime<Utc> = {
-                            let mut utc: DateTime<Utc> = Utc::now();
-                            let mut millisecond = utc.timestamp_millis();
-                            while self.last_rotated_time == millisecond {
-                                // Especially for Windows, because its time precision is about 15ms.
-                                thread::sleep(Duration::from_millis(FILE_WAIT_MILLI_SECONDS));
-                                utc = Utc::now();
-                                millisecond = utc.timestamp_millis();
-                            }
-                            self.last_rotated_time = millisecond;
-                            utc
-                        };
-
-                        let timestamp = utc.format("%Y-%m-%d-%H-%M-%S").to_string();
-                        let millisecond = utc.format("%.3f").to_string();
-
-                        file.flush()?;
-
-                        file.sync_all()?;
-
-                        drop(file);
-
-                        let rotated_log_file_name = format!(
-                            "{}-{}-{}{}",
-                            &self.file_name[..self.file_name_point_index],
-                            timestamp,
-                            &millisecond[1..],
-                            &self.file_name[self.file_name_point_index..]
-                        );
-
-                        let rotated_log_file =
-                            Path::join(&self.folder_path, Path::new(&rotated_log_file_name));
-
-                        fs::copy(&self.file_path, &rotated_log_file)?;
-
-                        if self.compress {
-                            let rotated_log_file_name_compressed =
-                                format!("{}.xz", rotated_log_file_name);
-                            let rotated_log_file_compressed = Path::join(
-                                &self.folder_path,
-                                Path::new(&rotated_log_file_name_compressed),
-                            );
-                            let rotated_log_file = rotated_log_file.clone();
-
-                            let tee = self.tee.clone();
-
-                            let print_err = move |s| match tee {
-                                Some(tee) => match tee {
-                                    Tee::Stdout => {
-                                        eprintln!("{}", s);
-                                    },
-                                    Tee::Stderr => {
-                                        println!("{}", s);
-                                    },
-                                },
-                                None => {
-                                    eprintln!("{}", s);
-                                },
-                            };
-
-                            thread::spawn(move || {
-                                match File::create(&rotated_log_file_compressed) {
-                                    Ok(file_w) => {
-                                        match File::open(&rotated_log_file) {
-                                            Ok(mut file_r) => {
-                                                let mut compressor = XzEncoder::new(file_w, 9);
-                                                let mut buffer = [0u8; BUFFER_SIZE];
-                                                loop {
-                                                    match file_r.read(&mut buffer) {
-                                                        Ok(c) => {
-                                                            if c == 0 {
-                                                                drop(file_r);
-                                                                if fs::remove_file(
-                                                                    &rotated_log_file,
-                                                                )
-                                                                .is_err()
-                                                                {
-                                                                    // do nothing
-                                                                }
-                                                                break;
-                                                            }
-                                                            match compressor.write(&buffer[..c]) {
-                                                                Ok(cc) => {
-                                                                    if c != cc {
-                                                                        print_err(
-                                                                            "The space is not \
-                                                                             enough."
-                                                                                .to_string(),
-                                                                        );
-                                                                        break;
-                                                                    }
-                                                                },
-                                                                Err(err) => {
-                                                                    print_err(err.to_string());
-                                                                    break;
-                                                                },
-                                                            }
-                                                        },
-                                                        Err(ref err)
-                                                            if err.kind()
-                                                                == io::ErrorKind::NotFound =>
-                                                        {
-                                                            // The rotated log file is deleted because of the count limit
-                                                            drop(compressor);
-                                                            if fs::remove_file(
-                                                                &rotated_log_file_compressed,
-                                                            )
-                                                            .is_err()
-                                                            {
-                                                                // do nothing
-                                                            }
-                                                            break;
-                                                        },
-                                                        Err(err) => {
-                                                            print_err(err.to_string());
-                                                            break;
-                                                        },
-                                                    }
-                                                }
-                                            },
-                                            Err(ref err)
-                                                if err.kind() == io::ErrorKind::NotFound =>
-                                            {
-                                                // The rotated log file is deleted because of the count limit
-                                                drop(file_w);
-                                                if fs::remove_file(&rotated_log_file_compressed)
-                                                    .is_err()
-                                                {
-                                                }
-                                            },
-                                            Err(err) => {
-                                                print_err(err.to_string());
-                                            },
-                                        }
-                                    },
-                                    Err(err) => {
-                                        print_err(err.to_string());
-                                    },
-                                };
-                            });
-                        }
-
-                        self.rotated_log_file_names.push(rotated_log_file_name);
-
-                        if let Some(count) = self.count {
-                            while self.rotated_log_file_names.len() >= count {
-                                let mut rotated_log_file_name =
-                                    self.rotated_log_file_names.remove(0);
-                                if fs::remove_file(Path::join(
-                                    &self.folder_path,
-                                    Path::new(&rotated_log_file_name),
-                                ))
-                                .is_err()
-                                {
-                                    // do nothing
-                                }
-
-                                let p_compressed_name = {
-                                    rotated_log_file_name.push_str(".xz");
-
-                                    rotated_log_file_name
-                                };
-
-                                let p_compressed =
-                                    Path::join(&self.folder_path, Path::new(&p_compressed_name));
-                                if fs::remove_file(p_compressed).is_err() {}
-                            }
-                        }
-
-                        file =
-                            OpenOptions::new().write(true).truncate(true).open(&self.file_path)?;
-
-                        self.file_size = 0;
-
-                        new_file = if self.compress {
-                            let mut s = rotated_log_file.into_os_string();
-                            s.push(".xz");
-                            Some(PathBuf::from(s))
-                        } else {
-                            Some(rotated_log_file)
-                        };
-                    }
-                },
+            if append_newline {
+                file.write_all(b"\n")?;
             }
+
+            Ok(())
+        })();
+
+        if let Err(error) = write_result {
+            self.refresh_file_size();
+
+            return Err(error);
         }
 
-        if n != len {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "The space is not enough."));
+        self.file_size = self.file_size.saturating_add(bytes.len() as u64);
+
+        if append_newline {
+            self.file_size = self.file_size.saturating_add(1);
         }
 
-        self.file = Some(file);
-
-        Ok(new_file)
+        if self.should_rotate() { self.rotate() } else { Ok(None) }
     }
 
-    /// Write a string with a new line. If the log is rotated, this method returns the renamed path.
-    pub fn write_line<S: AsRef<str>>(&mut self, text: S) -> io::Result<Option<PathBuf>> {
-        let new_file = self.write(text)?;
-
-        if new_file.is_none() {
-            match self.file {
-                Some(ref mut file) => {
-                    let n = file.write(b"\n")?;
-
-                    if n != 1 {
-                        return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "The space is not enough.",
-                        ));
-                    }
-
-                    self.file_size += 1u64;
-                },
-                None => unreachable!(),
-            }
-            self.print("\n");
+    #[inline]
+    const fn should_rotate(&self) -> bool {
+        match self.rotate {
+            Some(RotateMethod::FileSize(file_size)) => self.file_size >= file_size,
+            None => false,
         }
-
-        Ok(new_file)
     }
 
-    fn print<S: AsRef<str>>(&self, text: S) {
-        let s = text.as_ref();
+    fn rotate(&mut self) -> io::Result<Option<PathBuf>> {
+        let rotated_file = create_rotated_file(&self.folder_path, &self.file_name)?;
+        let mut file = self.file.take().ok_or_else(file_unavailable_error)?;
 
-        if let Some(tee) = &self.tee {
-            match tee {
-                Tee::Stdout => {
-                    print!("{}", s);
-                },
-                Tee::Stderr => {
-                    eprint!("{}", s);
-                },
-            }
+        if let Err(error) = file.flush() {
+            self.file = Some(file);
+
+            return Err(error);
         }
+
+        let permissions = match file.metadata() {
+            Ok(metadata) => metadata.permissions(),
+            Err(error) => {
+                self.file = Some(file);
+
+                return Err(error);
+            },
+        };
+
+        drop(file);
+
+        if let Err(error) = fs::rename(&self.file_path, &rotated_file.raw_path) {
+            self.reopen_active_file();
+
+            return Err(error);
+        }
+
+        let open_result = OpenOptions::new().append(true).create_new(true).open(&self.file_path);
+
+        let new_file = match open_result {
+            Ok(file) => file,
+            Err(error) => {
+                self.recover_from_new_file_error(&rotated_file, error.kind());
+
+                return Err(error);
+            },
+        };
+
+        let permission_result = new_file.set_permissions(permissions);
+
+        self.file_size = 0;
+        self.file = Some(new_file);
+
+        let retention_result = self.accept_rotated_file(rotated_file.clone());
+
+        permission_result?;
+        retention_result?;
+
+        if self.max_rotated_files == 0 {
+            Ok(None)
+        } else if self.compression_worker.is_some() {
+            Ok(Some(rotated_file.compressed_path))
+        } else {
+            Ok(Some(rotated_file.raw_path))
+        }
+    }
+
+    fn accept_rotated_file(&mut self, rotated_file: RotatedFile) -> io::Result<()> {
+        match &self.compression_worker {
+            Some(worker) => worker.rotate(rotated_file),
+            None => {
+                self.rotated_files.push_back(rotated_file);
+
+                enforce_retention(&mut self.rotated_files, self.max_rotated_files)
+            },
+        }
+    }
+
+    fn recover_from_new_file_error(
+        &mut self,
+        rotated_file: &RotatedFile,
+        error_kind: io::ErrorKind,
+    ) {
+        let rolled_back = error_kind != io::ErrorKind::AlreadyExists
+            && fs::rename(&rotated_file.raw_path, &self.file_path).is_ok();
+
+        self.reopen_active_file();
+
+        if !rolled_back {
+            let _ = self.accept_rotated_file(rotated_file.clone());
+        }
+    }
+
+    fn reopen_active_file(&mut self) {
+        self.file = OpenOptions::new().create(true).append(true).open(&self.file_path).ok();
+        self.refresh_file_size();
+    }
+
+    fn refresh_file_size(&mut self) {
+        self.file_size =
+            self.file.as_ref().and_then(|file| file.metadata().ok()).map_or(0, |m| m.len());
+    }
+
+    #[inline]
+    fn file_mut(&mut self) -> io::Result<&mut File> {
+        self.file.as_mut().ok_or_else(file_unavailable_error)
+    }
+
+    fn flush_inner(&mut self) -> io::Result<()> {
+        let output_result = self.flush_outputs();
+
+        let background_result = if let Some(worker) = &self.compression_worker {
+            worker.barrier()
+        } else {
+            enforce_retention(&mut self.rotated_files, self.max_rotated_files)
+        };
+
+        output_result.and(background_result)
+    }
+
+    fn finish_inner(&mut self) -> io::Result<()> {
+        if self.finished {
+            return Ok(());
+        }
+
+        let output_result = self.flush_outputs();
+
+        let retention_result = if self.compression_worker.is_none() {
+            enforce_retention(&mut self.rotated_files, self.max_rotated_files)
+        } else {
+            Ok(())
+        };
+
+        let worker_result = match &mut self.compression_worker {
+            Some(worker) => worker.finish(),
+            None => Ok(()),
+        };
+
+        self.finished = true;
+
+        output_result.and(retention_result).and(worker_result)
+    }
+
+    fn flush_outputs(&mut self) -> io::Result<()> {
+        let file_result = self.file_mut().and_then(Write::flush);
+        let tee_result = flush_tee(self.tee);
+
+        file_result.and(tee_result)
     }
 }
 
-// TODO -----PipeLogger END-----
+impl Write for PipeLogger {
+    #[inline]
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.write_bytes(buffer, false)?;
+
+        Ok(buffer.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        self.flush_inner()
+    }
+}
+
+impl Drop for PipeLogger {
+    fn drop(&mut self) {
+        let _ = self.finish_inner();
+    }
+}
+
+fn lock_path(folder_path: &Path, file_name: &OsStr) -> PathBuf {
+    let mut lock_file_name = file_name.to_os_string();
+
+    lock_file_name.push(".pipe-logger.lock");
+    folder_path.join(lock_file_name)
+}
+
+fn write_tee(tee: Option<Tee>, bytes: &[u8], append_newline: bool) -> io::Result<()> {
+    let Some(tee) = tee else {
+        return Ok(());
+    };
+
+    match tee {
+        Tee::Stdout => write_output(io::stdout().lock(), bytes, append_newline),
+        Tee::Stderr => write_output(io::stderr().lock(), bytes, append_newline),
+    }
+}
+
+fn write_output(mut output: impl Write, bytes: &[u8], append_newline: bool) -> io::Result<()> {
+    output.write_all(bytes)?;
+
+    if append_newline {
+        output.write_all(b"\n")?;
+    }
+
+    Ok(())
+}
+
+fn flush_tee(tee: Option<Tee>) -> io::Result<()> {
+    match tee {
+        Some(Tee::Stdout) => io::stdout().lock().flush(),
+        Some(Tee::Stderr) => io::stderr().lock().flush(),
+        None => Ok(()),
+    }
+}
+
+fn enforce_retention(
+    rotated_files: &mut VecDeque<RotatedFile>,
+    max_rotated_files: usize,
+) -> io::Result<()> {
+    while rotated_files.len() > max_rotated_files {
+        let rotated_file = rotated_files.front().ok_or_else(|| {
+            io::Error::other("The rotated file queue ended before retention completed.")
+        })?;
+
+        rotated_file.remove()?;
+        rotated_files.pop_front();
+    }
+
+    Ok(())
+}
+
+fn file_unavailable_error() -> io::Error {
+    io::Error::other("The active log file is unavailable after a failed rotation.")
+}

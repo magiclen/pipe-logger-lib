@@ -1,75 +1,43 @@
 Pipe Logger Lib
-====================
+===============
 
 [![CI](https://github.com/magiclen/pipe-logger-lib/actions/workflows/ci.yml/badge.svg)](https://github.com/magiclen/pipe-logger-lib/actions/workflows/ci.yml)
 
-Stores, rotates, compresses process logs.
+Stores, rotates, and compresses process logs.
+
+`count` includes the active log file, so a count of 10 keeps up to 9 rotated files.
+
+Call `PipeLogger::flush` to wait for queued compression work while keeping the logger open.
+
+Call `PipeLogger::finish` to wait for queued compression work and report its final result.
 
 ## Example
 
 ```rust
-use pipe_logger_lib::*;
+use std::{error::Error, fs, path::Path};
 
-use std::fs;
-use std::path::Path;
+use pipe_logger_lib::{CompressionMethod, PipeLoggerBuilder, RotateMethod, Tee};
 
-let test_folder = {
-  let folder = Path::join(&Path::join(Path::new("tests"), Path::new("out")), "log-example");
+fn main() -> Result<(), Box<dyn Error>> {
+    let folder = Path::new("logs");
 
-  fs::remove_dir_all(&folder);
+    fs::create_dir_all(folder)?;
 
-  fs::create_dir_all(&folder).unwrap();
+    let mut builder = PipeLoggerBuilder::new(folder.join("application.log"));
 
-  folder
-};
+    builder
+        .set_tee(Some(Tee::Stdout))
+        .set_rotate(Some(RotateMethod::FileSize(1024 * 1024)))
+        .set_count(Some(10))
+        .set_compression(Some(CompressionMethod::Xz(6)));
 
-let test_log_file = Path::join(&test_folder, Path::new("mylog.txt"));
+    let mut logger = builder.build()?;
 
-let mut builder = PipeLoggerBuilder::new(&test_log_file);
+    logger.write_line("The application started.")?;
+    logger.finish()?;
 
-builder
-    .set_tee(Some(Tee::Stdout))
-    .set_rotate(Some(RotateMethod::FileSize(30))) // bytes
-    .set_count(Some(10))
-    .set_compress(false);
-
-{
-    let mut logger = builder.build().unwrap();
-
-    logger.write_line("Hello world!").unwrap();
-
-    let rotated_log_file_1 = logger.write_line("This is a convenient logger.").unwrap().unwrap();
-
-    logger.write_line("Other logs...").unwrap();
-    logger.write_line("Other logs...").unwrap();
-
-    let rotated_log_file_2 = logger.write_line("Rotate again!").unwrap().unwrap();
-
-    logger.write_line("Ops!").unwrap();
+    Ok(())
 }
-
-fs::remove_dir_all(test_folder).unwrap();
-```
-
-Now, the contents of `test_log_file` are,
-
-```text
-Ops!
-```
-
-The contents of `rotated_log_file_1` are,
-
-```text
-Hello world!
-This is a convenient logger.
-```
-
-The contents of `rotated_log_file_2` are,
-
-```text
-Other logs...
-Other logs...
-Rotate again!
 ```
 
 ## Crates.io
