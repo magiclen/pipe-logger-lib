@@ -58,7 +58,7 @@ pub use compression_method::CompressionMethod;
 use compression_worker::CompressionWorker;
 use path_absolutize::Absolutize;
 pub use rotate_method::RotateMethod;
-use rotated_file::{RotatedFile, create_rotated_file, scan_rotated_files};
+use rotated_file::{RotatedFile, create_rotated_file, enforce_retention, scan_rotated_files};
 
 /// The output stream that receives a copy of every log write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -311,8 +311,7 @@ impl PipeLogger {
             return Ok(None);
         }
 
-        write_tee(self.tee, bytes, append_newline)?;
-
+        // Write to the file first so a broken tee pipe cannot drop a log line.
         let write_result = (|| {
             let file = self.file_mut()?;
 
@@ -336,6 +335,8 @@ impl PipeLogger {
         if append_newline {
             self.file_size = self.file_size.saturating_add(1);
         }
+
+        write_tee(self.tee, bytes, append_newline)?;
 
         if self.should_rotate() { self.rotate() } else { Ok(None) }
     }
@@ -543,22 +544,6 @@ fn flush_tee(tee: Option<Tee>) -> io::Result<()> {
         Some(Tee::Stderr) => io::stderr().lock().flush(),
         None => Ok(()),
     }
-}
-
-fn enforce_retention(
-    rotated_files: &mut VecDeque<RotatedFile>,
-    max_rotated_files: usize,
-) -> io::Result<()> {
-    while rotated_files.len() > max_rotated_files {
-        let rotated_file = rotated_files.front().ok_or_else(|| {
-            io::Error::other("The rotated file queue ended before retention completed.")
-        })?;
-
-        rotated_file.remove()?;
-        rotated_files.pop_front();
-    }
-
-    Ok(())
 }
 
 fn file_unavailable_error() -> io::Error {

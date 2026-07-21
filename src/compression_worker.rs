@@ -8,7 +8,7 @@ use std::{
 
 use liblzma::write::XzEncoder;
 
-use crate::rotated_file::RotatedFile;
+use crate::rotated_file::{RotatedFile, enforce_retention, remove_if_exists};
 
 enum Message {
     Rotate(RotatedFile),
@@ -85,6 +85,11 @@ fn run(
     let mut failed_compressions = VecDeque::new();
     let mut pending_error = None;
 
+    // Drop files beyond the retention limit before compressing the survivors.
+    if let Err(error) = enforce_retention(&mut rotated_files, max_rotated_files) {
+        record_error(&mut pending_error, error);
+    }
+
     if max_rotated_files > 0 {
         for rotated_file in rotated_files.iter() {
             if let Err(error) = compress_if_needed(rotated_file, level) {
@@ -93,10 +98,6 @@ fn run(
                 record_error(&mut pending_error, error);
             }
         }
-    }
-
-    if let Err(error) = enforce_retention(&mut rotated_files, max_rotated_files) {
-        record_error(&mut pending_error, error);
     }
 
     while let Ok(message) = receiver.recv() {
@@ -208,39 +209,10 @@ fn compress(rotated_file: &RotatedFile, level: u32) -> io::Result<()> {
     })();
 
     if result.is_err() {
-        match fs::remove_file(temporary_path) {
-            Ok(()) => {},
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {},
-            Err(_) => {},
-        }
+        let _ = remove_if_exists(&temporary_path);
     }
 
     result
-}
-
-fn remove_if_exists(path: impl AsRef<std::path::Path>) -> io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-fn enforce_retention(
-    rotated_files: &mut VecDeque<RotatedFile>,
-    max_rotated_files: usize,
-) -> io::Result<()> {
-    while rotated_files.len() > max_rotated_files {
-        let Some(rotated_file) = rotated_files.front() else {
-            break;
-        };
-
-        rotated_file.remove()?;
-
-        rotated_files.pop_front();
-    }
-
-    Ok(())
 }
 
 fn record_error(pending_error: &mut Option<io::Error>, error: io::Error) {

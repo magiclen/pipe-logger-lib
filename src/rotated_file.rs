@@ -165,6 +165,7 @@ fn parse_new_rotated_file_name(file_name: &OsStr, log_file_name: &OsStr) -> Opti
 
     let suffix = std::str::from_utf8(&file_stem[log_stem.len() + 1..]).ok()?;
 
+    // Fixed 61-byte layout: date (19) + '-' + subsec nanos (9) + '-' + pid (10) + '-' + sequence (20).
     if suffix.len() != 61
         || suffix.as_bytes().get(29) != Some(&b'-')
         || suffix.as_bytes().get(40) != Some(&b'-')
@@ -225,7 +226,24 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
-fn remove_if_exists(path: &Path) -> io::Result<()> {
+pub(crate) fn enforce_retention(
+    rotated_files: &mut VecDeque<RotatedFile>,
+    max_rotated_files: usize,
+) -> io::Result<()> {
+    while rotated_files.len() > max_rotated_files {
+        let Some(rotated_file) = rotated_files.front() else {
+            break;
+        };
+
+        rotated_file.remove()?;
+
+        rotated_files.pop_front();
+    }
+
+    Ok(())
+}
+
+pub(crate) fn remove_if_exists(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
