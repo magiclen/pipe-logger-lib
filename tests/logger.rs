@@ -204,7 +204,8 @@ fn scanner_accepts_exact_new_and_legacy_names_only() {
     fs::write(&invalid_date_path, b"invalid").unwrap();
     fs::write(&unrelated_path, b"unrelated").unwrap();
 
-    #[cfg(unix)]
+    // macOS rejects non-UTF-8 file names, so only exercise this on other unix systems.
+    #[cfg(all(unix, not(target_os = "macos")))]
     let non_utf8_path = {
         use std::{ffi::OsString, os::unix::ffi::OsStringExt};
 
@@ -221,7 +222,7 @@ fn scanner_accepts_exact_new_and_legacy_names_only() {
     assert!(new_path.exists());
     assert!(invalid_date_path.exists());
     assert!(unrelated_path.exists());
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     assert!(non_utf8_path.exists());
 
     fs::remove_dir_all(folder).unwrap();
